@@ -1,0 +1,18 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Users upload resumes / writing samples to their own folder and can
+    // read back anything the engine stores for them (screenshots, PDFs).
+    match /users/{uid}/{allPaths=**} {
+      allow read: if request.auth != null && request.auth.uid == uid;
+      allow write: if request.auth != null
+        && request.auth.uid == uid
+        && request.resource.size < 10 * 1024 * 1024; // 10 MB cap
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+venv/
+.venv/
+node_modules/
+web/out/
+web/.next/
+.env.local
+.firebase/
+# vendored copies — regenerate with ./sync_shared.sh
+functions/schemas.py
+functions/state_machine.py
+worker/schemas.py
+worker/state_machine.py

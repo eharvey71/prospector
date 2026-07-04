@@ -1,0 +1,78 @@
+rules_version = '2';
+
+// Principles:
+// - Users can read/write ONLY their own subtree (users/{uid}/**), with
+//   field-level guards on state transitions they are allowed to make.
+// - jobPostings are global, readable by any signed-in user, writable only
+//   by the engine (Admin SDK bypasses rules, so no client write path exists).
+// - Everything else is denied by default.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // ------------------------------------------------------------------
+    // Global job postings: read-only to clients. The discovery functions
+    // write these through the Admin SDK, which bypasses these rules.
+    // ------------------------------------------------------------------
+    match /jobPostings/{postingId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
+    // ------------------------------------------------------------------
+    // Per-user data
+    // ------------------------------------------------------------------
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+      // Profile edits from the client are fine; the engine also writes here.
+      allow create, update: if isOwner(uid);
+      allow delete: if false;
+
+      // Applications: clients may only perform the transitions a human is
+      // supposed to make (approve / reject / edit letter while in review).
+      // All other state moves come from the engine via Admin SDK.
+      match /applications/{appId} {
+        allow read: if isOwner(uid);
+        allow create: if false; // engine-only
+        allow delete: if false;
+
+        allow update: if isOwner(uid)
+          && clientTransitionAllowed()
+          && onlyEditableFieldsChanged();
+
+        function clientTransitionAllowed() {
+          let before = resource.data.state;
+          let after = request.resource.data.state;
+          // No state change at all (e.g. editing the letter text), or one of
+          // the human-owned transitions.
+          return (before == after)
+            || (before == 'in_review' && after in ['approved', 'rejected'])
+            || (before == 'needs_human' && after in ['submitted', 'rejected']);
+        }
+
+        function onlyEditableFieldsChanged() {
+          // Clients may touch: state, letter, screeningAnswers, reviewNote.
+          return request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['state', 'stateHistory', 'letter', 'screeningAnswers', 'reviewNote', 'updatedAt']);
+        }
+      }
+
+      // Company watchlist the discovery crawler reads.
+      match /watchlist/{docId} {
+        allow read, write: if isOwner(uid);
+      }
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -1,0 +1,13 @@
+[project]
+name = "jobengine-shared"
+version = "0.1.0"
+description = "Shared schemas and state machine for the job engine"
+requires-python = ">=3.12"
+dependencies = ["pydantic>=2.7"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+py-modules = ["schemas", "state_machine"]
