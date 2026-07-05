@@ -144,8 +144,6 @@ npm run deploy               # build + firebase deploy --only hosting
 
 ## What's intentionally not here yet
 
-- **Lever Tier-1 adapter** — clone the Greenhouse adapter's shape against
-  `jobs.lever.co/.../apply` forms.
 - **Tier 2 agentic adapter** for unknown ATSes — implements the same
   `SubmissionAdapter` interface; the worker routing already supports it.
 - **Gmail feedback loop** (confirmations/rejections → status updates).
