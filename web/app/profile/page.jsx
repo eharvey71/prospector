@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
-import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import { deleteDoc, doc, getDoc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
 import { ref, uploadBytes, getMetadata } from "firebase/storage";
 import { auth, db, googleProvider, storage } from "../../lib/firebase";
 
@@ -36,6 +36,7 @@ export default function ProfilePage() {
   const [user, setUser] = useState(null);
   const [status, setStatus] = useState("");
   const [resumeInfo, setResumeInfo] = useState(null);
+  const [extraction, setExtraction] = useState(null);
 
   // Flat profile fields
   const [name, setName] = useState("");
@@ -54,6 +55,16 @@ export default function ProfilePage() {
   const [leverBoards, setLeverBoards] = useState("");
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
+
+  // Extraction suggestion appears live once the engine finishes parsing an
+  // uploaded resume (usually well under a minute after upload).
+  useEffect(() => {
+    if (!user) return;
+    return onSnapshot(
+      doc(db, "users", user.uid, "resume_extraction", "latest"),
+      (snap) => setExtraction(snap.exists() ? snap.data() : null)
+    );
+  }, [user]);
 
   // Load existing profile + watchlist + resume status
   useEffect(() => {
@@ -140,6 +151,28 @@ export default function ProfilePage() {
     setTimeout(() => setStatus(""), 2500);
   }
 
+  async function applyExtraction() {
+    const x = extraction;
+    if (x.name) setName(x.name);
+    if (x.location) setLocation(x.location);
+    if (x.work_auth) setWorkAuth(x.work_auth);
+    if (x.skills?.length) {
+      const merged = new Set([...csv(skills), ...x.skills]);
+      setSkills([...merged].join(", "));
+    }
+    if (x.work_history?.length) {
+      setHistory(x.work_history.map(r => ({
+        ...r, end: r.end || "", bullets: r.bullets?.length ? r.bullets : [""],
+      })));
+    }
+    await dismissExtraction();
+    setStatus("Applied — review the fields below, then Save profile");
+  }
+
+  async function dismissExtraction() {
+    await deleteDoc(doc(db, "users", user.uid, "resume_extraction", "latest"));
+  }
+
   // --- small helpers for list editing ---
   const setRole = (i, patch) =>
     setHistory(h => h.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -191,6 +224,28 @@ export default function ProfilePage() {
         </p>
         <input type="file" accept="application/pdf"
                onChange={e => uploadResume(e.target.files?.[0])} />
+
+        {extraction && (
+          <div style={{ ...box, background: T.panelAlt, borderColor: T.accent, marginTop: 16, marginBottom: 0 }}>
+            <strong style={{ color: T.accent }}>Extracted from your resume</strong>
+            <p style={{ color: T.muted, fontSize: 13 }}>
+              Nothing is saved until you apply it, review the fields, and hit
+              Save profile. Applying replaces the work-history form with the
+              extracted roles and merges skills.
+            </p>
+            <ul style={{ fontSize: 14 }}>
+              {extraction.name && <li>Name: {extraction.name}</li>}
+              {extraction.location && <li>Location: {extraction.location}</li>}
+              {extraction.work_auth && <li>Work authorization: {extraction.work_auth}</li>}
+              {extraction.skills?.length > 0 && <li>{extraction.skills.length} skills: {extraction.skills.join(", ")}</li>}
+              {extraction.work_history?.length > 0 && (
+                <li>{extraction.work_history.length} roles: {extraction.work_history.map(r => `${r.title} @ ${r.company}`).join("; ")}</li>
+              )}
+            </ul>
+            <button style={btnPrimary} onClick={applyExtraction}>Apply to form</button>{" "}
+            <button style={btn} onClick={dismissExtraction}>Dismiss</button>
+          </div>
+        )}
       </section>
 
       <section style={box}>

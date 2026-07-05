@@ -8,6 +8,8 @@ Triggers:
   on_application_written  applications/{id} written -> route by state:
                             matched  -> drafting
                             approved -> enqueue Cloud Task to the worker
+  on_resume_uploaded      Storage finalize on users/{uid}/resume.pdf ->
+                            LLM extraction staged for review in profile UI
 """
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ import logging
 import os
 
 from firebase_admin import initialize_app
-from firebase_functions import firestore_fn, options, scheduler_fn
+from firebase_functions import firestore_fn, options, scheduler_fn, storage_fn
 from google.cloud import firestore, tasks_v2
 
 from schemas import AppState, AtsType, SubmitTask
@@ -78,6 +80,19 @@ def on_posting_written(event: firestore_fn.Event) -> None:
             match_posting_for_user(db, user_doc.id, posting_id, posting)
         except Exception:
             log.exception("matching failed uid=%s posting=%s", user_doc.id, posting_id)
+
+
+# ---------------------------------------------------------------------------
+# Resume upload -> profile extraction (staged for human review, never applied
+# directly; the profile UI owns the merge)
+# ---------------------------------------------------------------------------
+
+@storage_fn.on_object_finalized(timeout_sec=300, secrets=["ANTHROPIC_API_KEY"])
+def on_resume_uploaded(event: storage_fn.CloudEvent[storage_fn.StorageObjectData]) -> None:
+    from resume import process_resume_upload
+    # Fires for every object in the default bucket; resume.py filters to
+    # users/{uid}/resume.pdf and ignores everything else (e.g. screenshots).
+    process_resume_upload(_db(), event.data.bucket, event.data.name)
 
 
 # ---------------------------------------------------------------------------

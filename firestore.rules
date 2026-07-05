@@ -69,6 +69,14 @@ service cloud.firestore {
       match /watchlist/{docId} {
         allow read, write: if isOwner(uid);
       }
+
+      // LLM extraction from an uploaded resume, staged for review in the
+      // profile UI. Engine-written via Admin SDK; clients read it and may
+      // delete it once applied or dismissed.
+      match /resume_extraction/{docId} {
+        allow read, delete: if isOwner(uid);
+        allow create, update: if false;
+      }
     }
 
     match /{document=**} {

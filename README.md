@@ -122,16 +122,15 @@ npm run deploy               # build + firebase deploy --only hosting
 ## Seed data to get moving
 
 1. Sign in once through the web UI (creates your `uid`).
-2. Create `users/{uid}` with your profile matching `shared/schemas.py::UserProfile`
-   (a resume-parsing upload flow is the natural next feature; hand-write the
-   doc for now).
-3. Upload your resume to Storage at `users/{uid}/resume.pdf`.
-4. Create `users/{uid}/watchlist/companies`:
-   ```json
-   { "greenhouse": ["anthropic", "stripe"], "lever": ["plaid"] }
-   ```
-5. Trigger a crawl manually (Cloud Scheduler console → force run) or wait 6h.
-6. Watch applications appear in the review queue.
+2. Go to `/profile` and upload your resume. The `on_resume_uploaded` function
+   extracts name/location/skills/work history via LLM and stages the result
+   at `users/{uid}/resume_extraction/latest`; a suggestion panel appears in
+   the profile page — apply it, review the fields, and Save. (Nothing is
+   written to your live profile without that explicit apply + save.)
+3. Fill in what extraction can't know: writing samples, preferences, salary
+   target, and the company watchlist (all on the same page).
+4. Trigger a crawl manually (Cloud Scheduler console → force run) or wait 6h.
+5. Watch applications appear in the review queue.
 
 ## Go-live checklist (deliberately manual)
 
@@ -145,8 +144,6 @@ npm run deploy               # build + firebase deploy --only hosting
 
 ## What's intentionally not here yet
 
-- **Resume-upload → LLM profile extraction** (week-1 feature; the schemas are
-  ready for it).
 - **Lever Tier-1 adapter** — clone the Greenhouse adapter's shape against
   `jobs.lever.co/.../apply` forms.
 - **Tier 2 agentic adapter** for unknown ATSes — implements the same
