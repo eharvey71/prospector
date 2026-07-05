@@ -48,6 +48,10 @@ WORKER_SA = os.environ.get("WORKER_INVOKER_SA", "")  # service account email
 # SDK resolving it from FIREBASE_CONFIG, which is absent in local imports and
 # has broken function discovery at deploy time before. Set it explicitly.
 STORAGE_BUCKET = os.environ.get("STORAGE_BUCKET") or None
+# Eventarc requires a Storage trigger to be in the same region as its bucket.
+# This project's default bucket lives in us-east1, unlike everything else,
+# so the resume trigger alone overrides the us-central1 global default.
+STORAGE_REGION = os.environ.get("STORAGE_REGION", "us-central1")
 
 
 def _db() -> firestore.Client:
@@ -99,8 +103,8 @@ def on_posting_written(event: firestore_fn.Event) -> None:
 # directly; the profile UI owns the merge)
 # ---------------------------------------------------------------------------
 
-@storage_fn.on_object_finalized(bucket=STORAGE_BUCKET, timeout_sec=300,
-                                secrets=["ANTHROPIC_API_KEY"])
+@storage_fn.on_object_finalized(bucket=STORAGE_BUCKET, region=STORAGE_REGION,
+                                timeout_sec=300, secrets=["ANTHROPIC_API_KEY"])
 def on_resume_uploaded(event: storage_fn.CloudEvent[storage_fn.StorageObjectData]) -> None:
     from resume import process_resume_upload
     # Fires for every object in the default bucket; resume.py filters to
