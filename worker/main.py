@@ -2,9 +2,8 @@
 
 Receives Cloud Tasks at POST /submit, routes by ATS type:
   Tier 1  deterministic Playwright adapter (greenhouse, lever)
+  Tier 2  agentic adapter for unknown ATSes (LLM plans, code fills+verifies)
   Tier 3  escalate to NEEDS_HUMAN with pre-filled answers
-(Tier 2, the agentic form-filler for unknown ATSes, slots in later behind the
-same interface — see adapters/base.py.)
 
 HTTP semantics for Cloud Tasks: 2xx = done (success OR handled escalation);
 5xx = retry with backoff. Escalations return 200 on purpose so the queue

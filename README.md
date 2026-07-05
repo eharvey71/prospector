@@ -84,7 +84,11 @@ gcloud run deploy job-engine-worker \
   --region us-central1 \
   --no-allow-unauthenticated \
   --concurrency 1 --memory 2Gi --timeout 900 \
-  --set-env-vars STORAGE_BUCKET=your-project-id.appspot.com,SUBMIT_DRY_RUN=true
+  --set-env-vars STORAGE_BUCKET=your-project-id.appspot.com,SUBMIT_DRY_RUN=true \
+  --set-secrets ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest
+# The secret powers the Tier 2 agentic adapter; create it once with
+#   gcloud secrets create ANTHROPIC_API_KEY --data-file=- <<< "sk-ant-..."
+# (or reuse the secret Firebase created for functions).
 
 # Cloud Tasks queue with polite per-queue rate limiting
 gcloud tasks queues create submissions \
@@ -144,8 +148,6 @@ npm run deploy               # build + firebase deploy --only hosting
 
 ## What's intentionally not here yet
 
-- **Tier 2 agentic adapter** for unknown ATSes — implements the same
-  `SubmissionAdapter` interface; the worker routing already supports it.
 - **Gmail feedback loop** (confirmations/rejections → status updates).
 - **Workday** — permanently Tier 3 until you hate yourself enough.
 

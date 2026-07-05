@@ -4,3 +4,5 @@ playwright==1.61.0
 google-cloud-firestore>=2.16
 google-cloud-storage>=2.16
 pydantic>=2.7
+anthropic>=0.40
+google-genai>=1.0
