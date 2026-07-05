@@ -1,5 +1,5 @@
 # Playwright's official image ships Chromium + all system deps.
-FROM mcr.microsoft.com/playwright/python:v1.48.0-noble
+FROM mcr.microsoft.com/playwright/python:v1.61.0-noble
 
 WORKDIR /app
 COPY requirements.txt .

@@ -54,7 +54,10 @@ def crawl_boards(event: scheduler_fn.ScheduledEvent) -> None:
 # Matching (posting written -> score for every user)
 # ---------------------------------------------------------------------------
 
-@firestore_fn.on_document_written(document="jobPostings/{postingId}", timeout_sec=300)
+@firestore_fn.on_document_written(
+    document="jobPostings/{postingId}", timeout_sec=300,
+    secrets=["ANTHROPIC_API_KEY"],
+)
 def on_posting_written(event: firestore_fn.Event) -> None:
     if event.data is None or event.data.after is None:
         return
@@ -82,7 +85,8 @@ def on_posting_written(event: firestore_fn.Event) -> None:
 # ---------------------------------------------------------------------------
 
 @firestore_fn.on_document_written(
-    document="users/{uid}/applications/{appId}", timeout_sec=540
+    document="users/{uid}/applications/{appId}", timeout_sec=540,
+    secrets=["ANTHROPIC_API_KEY"],
 )
 def on_application_written(event: firestore_fn.Event) -> None:
     if event.data is None or event.data.after is None:
@@ -127,6 +131,10 @@ def _enqueue_submission(uid: str, app_id: str, app_data: dict) -> None:
         ats_type=AtsType(posting.get("source", "unknown")),
         job_url=str(posting.get("url", "")),
     )
+    
+    if not advance(db, uid, app_id, AppState.APPROVED, AppState.QUEUED,
+               note="enqueuing cloud task"):
+        return  # another invocation already handled this state change
 
     client = tasks_v2.CloudTasksClient()
     parent = client.queue_path(PROJECT, QUEUE_LOCATION, QUEUE_NAME)
@@ -140,7 +148,5 @@ def _enqueue_submission(uid: str, app_id: str, app_data: dict) -> None:
         }
     }
     client.create_task(request={"parent": parent, "task": task})
-
-    if advance(db, uid, app_id, AppState.APPROVED, AppState.QUEUED,
-               note="cloud task created"):
-        log.info("enqueued submission uid=%s app=%s", uid, app_id)
+    log.info("enqueued submission task uid=%s app=%s", uid, app_id)
+    
