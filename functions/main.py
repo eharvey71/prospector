@@ -16,6 +16,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Deployed env vars win (load_dotenv never overrides existing vars); this
+# makes .env visible to bare imports and CLI function discovery alike.
+load_dotenv(Path(__file__).parent / ".env")
 
 from firebase_admin import initialize_app
 from firebase_functions import firestore_fn, options, scheduler_fn, storage_fn
