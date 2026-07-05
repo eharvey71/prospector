@@ -278,13 +278,26 @@ class LeverAdapter(SubmissionAdapter):
     # ------------------------------------------------------------------
 
     async def _fill(self, page, selector: str, value: str) -> bool:
+        """Fill and verify: read the value back and log a mismatch loudly.
+        A fill that silently doesn't stick (page JS clearing it, a decoy
+        element matching first) otherwise only surfaces as a confusing
+        entry in the escalation reason."""
         if not value:
             return False
         loc = page.locator(selector).first
-        if await loc.count() > 0:
-            await loc.fill(value)
-            return True
-        return False
+        n = await loc.count()
+        if n == 0:
+            log.info("fill %s: no match on page", selector)
+            return False
+        await loc.fill(value)
+        shown = await loc.input_value()
+        if shown != value:
+            log.warning("fill %s did NOT stick: wanted %r, field shows %r "
+                        "(matches on page: %d)", selector, value, shown,
+                        await page.locator(selector).count())
+            return False
+        log.info("fill %s ok", selector)
+        return True
 
     async def _is_required(self, locator) -> bool:
         if await locator.count() == 0:
@@ -294,17 +307,21 @@ class LeverAdapter(SubmissionAdapter):
             " || !!el.closest('li,div')?.querySelector('.required')")
 
     async def _unmapped_required(self, page) -> list[str]:
+        # Label lookup walks up to the question block first, so an input
+        # nested in its own wrapper div still reports as "LinkedIn URL"
+        # rather than its internal name "urls[LinkedIn]".
         return await page.evaluate("""
-            () => [...document.querySelectorAll(
+            () => [...new Set([...document.querySelectorAll(
                 'input[required], textarea[required], select[required]')]
-                .filter(el => el.type !== 'file'
+                .filter(el => el.type !== 'file' && el.type !== 'hidden'
                         && el.type !== 'radio' && el.type !== 'checkbox'
                         && el.offsetParent !== null
                         && !el.value)
                 .map(el => {
-                    const c = el.closest('li,div');
+                    const c = el.closest('.application-question')
+                        || el.closest('li') || el.closest('div');
                     const lbl = c?.querySelector('.application-label, label');
                     return (lbl?.textContent || el.name || el.placeholder
                             || 'unknown').replace(/[✱*]/g, '').trim().slice(0, 60);
-                })
+                }))]
         """)
