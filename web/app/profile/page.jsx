@@ -8,8 +8,9 @@
 import { useEffect, useState } from "react";
 import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
 import { deleteDoc, doc, getDoc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
 import { ref, uploadBytes, getMetadata } from "firebase/storage";
-import { auth, db, googleProvider, storage } from "../../lib/firebase";
+import { auth, db, functions, googleProvider, storage } from "../../lib/firebase";
 
 const EMPTY_ROLE = { company: "", title: "", start: "", end: "", bullets: [""] };
 const EMPTY_SAMPLE = { title: "", text: "" };
@@ -53,6 +54,9 @@ export default function ProfilePage() {
   const [samples, setSamples] = useState([]);
   const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
   const [leverBoards, setLeverBoards] = useState("");
+  const [suggestRole, setSuggestRole] = useState("");
+  const [suggesting, setSuggesting] = useState(false);
+  const [suggestions, setSuggestions] = useState([]); // verified boards
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
@@ -171,6 +175,32 @@ export default function ProfilePage() {
 
   async function dismissExtraction() {
     await deleteDoc(doc(db, "users", user.uid, "resume_extraction", "latest"));
+  }
+
+  async function findCompanies() {
+    if (!suggestRole.trim()) return;
+    setSuggesting(true);
+    setSuggestions([]);
+    try {
+      const call = httpsCallable(functions, "suggest_companies", { timeout: 300_000 });
+      const res = await call({ role: suggestRole });
+      const found = res.data?.companies || [];
+      setSuggestions(found);
+      if (found.length === 0) setStatus("No verified boards found — try rewording the role");
+    } catch (e) {
+      setStatus(`Suggestion failed: ${e.message}`);
+    } finally {
+      setSuggesting(false);
+    }
+  }
+
+  function addSuggestion(s) {
+    if (s.ats === "greenhouse") {
+      setGhBoards(prev => [...new Set([...csv(prev), s.slug])].join(", "));
+    } else {
+      setLeverBoards(prev => [...new Set([...csv(prev), s.slug])].join(", "));
+    }
+    setSuggestions(list => list.filter(x => x.slug !== s.slug));
   }
 
   // --- small helpers for list editing ---
@@ -326,6 +356,40 @@ export default function ProfilePage() {
         <input style={input} value={ghBoards} onChange={e => setGhBoards(e.target.value)} />
         <span style={label}>Lever board slugs (jobs.lever.co/SLUG)</span>
         <input style={input} value={leverBoards} onChange={e => setLeverBoards(e.target.value)} />
+
+        <h3 style={{ marginTop: 20 }}>Find companies for me</h3>
+        <p style={{ color: T.muted, fontSize: 13 }}>
+          Describe the role you want; the engine proposes companies and only
+          shows ones with a live, supported job board. Adding one puts it in
+          the fields above — hit Save profile to keep it.
+        </p>
+        <textarea
+          style={{ ...input, height: 60 }}
+          placeholder="e.g. solutions engineering roles in ed-tech or AI products, remote-friendly"
+          value={suggestRole}
+          onChange={e => setSuggestRole(e.target.value)}
+        />
+        <button style={btnPrimary} disabled={suggesting} onClick={findCompanies}>
+          {suggesting ? "Searching… (can take a minute)" : "Suggest companies"}
+        </button>
+        {suggestions.map(s => (
+          <div key={s.slug} style={{
+            display: "flex", alignItems: "center", gap: 12,
+            background: T.panelAlt, border: `1px solid ${T.border}`,
+            borderRadius: 6, padding: "8px 12px", marginTop: 8,
+          }}>
+            <div style={{ flex: 1 }}>
+              <strong>{s.company}</strong>{" "}
+              <span style={{ color: T.muted, fontSize: 13 }}>
+                {s.ats} · {s.jobs} open roles
+              </span>
+              <div style={{ color: T.muted, fontSize: 12 }}>
+                {(s.sample_titles || []).filter(Boolean).join(" · ")}
+              </div>
+            </div>
+            <button style={btn} onClick={() => addSuggestion(s)}>Add</button>
+          </div>
+        ))}
       </section>
 
       <div style={{ position: "sticky", bottom: 0, background: "#15171c", padding: "12px 0" }}>

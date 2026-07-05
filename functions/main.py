@@ -25,7 +25,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 from firebase_admin import initialize_app
-from firebase_functions import firestore_fn, options, scheduler_fn, storage_fn
+from firebase_functions import firestore_fn, https_fn, options, scheduler_fn, storage_fn
 from google.cloud import firestore, tasks_v2
 
 from schemas import AppState, AtsType, SubmitTask
@@ -96,6 +96,32 @@ def on_posting_written(event: firestore_fn.Event) -> None:
             match_posting_for_user(db, user_doc.id, posting_id, posting)
         except Exception:
             log.exception("matching failed uid=%s posting=%s", user_doc.id, posting_id)
+
+
+# ---------------------------------------------------------------------------
+# Company suggester (callable from the profile UI). LLM proposes, the board
+# APIs verify; the client decides what joins the watchlist.
+# ---------------------------------------------------------------------------
+
+@https_fn.on_call(timeout_sec=300, secrets=["ANTHROPIC_API_KEY"])
+def suggest_companies(req: https_fn.CallableRequest) -> dict:
+    if req.auth is None:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.UNAUTHENTICATED, "sign in first")
+    role = (req.data or {}).get("role", "").strip()
+    if not role:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.INVALID_ARGUMENT, "role is required")
+
+    # Companies already on the watchlist aren't suggested again.
+    wl = (
+        _db().collection("users").document(req.auth.uid)
+        .collection("watchlist").document("companies").get().to_dict() or {}
+    )
+    exclude = {s.lower() for s in wl.get("greenhouse", []) + wl.get("lever", [])}
+
+    from suggest import suggest_companies as run_suggest
+    return {"companies": run_suggest(role, exclude)}
 
 
 # ---------------------------------------------------------------------------
