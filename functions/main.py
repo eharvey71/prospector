@@ -36,6 +36,11 @@ QUEUE_LOCATION = os.environ.get("TASKS_LOCATION", "us-central1")
 QUEUE_NAME = os.environ.get("TASKS_QUEUE", "submissions")
 WORKER_URL = os.environ.get("WORKER_URL", "")  # Cloud Run URL, set after deploy
 WORKER_SA = os.environ.get("WORKER_INVOKER_SA", "")  # service account email
+# Default bucket for resume uploads — same value the web app uses
+# (NEXT_PUBLIC_FB_STORAGE_BUCKET). Set in .env; when unset, falls back to the
+# SDK resolving it from FIREBASE_CONFIG, which is absent in local imports and
+# has broken function discovery at deploy time before. Set it explicitly.
+STORAGE_BUCKET = os.environ.get("STORAGE_BUCKET") or None
 
 
 def _db() -> firestore.Client:
@@ -87,7 +92,8 @@ def on_posting_written(event: firestore_fn.Event) -> None:
 # directly; the profile UI owns the merge)
 # ---------------------------------------------------------------------------
 
-@storage_fn.on_object_finalized(timeout_sec=300, secrets=["ANTHROPIC_API_KEY"])
+@storage_fn.on_object_finalized(bucket=STORAGE_BUCKET, timeout_sec=300,
+                                secrets=["ANTHROPIC_API_KEY"])
 def on_resume_uploaded(event: storage_fn.CloudEvent[storage_fn.StorageObjectData]) -> None:
     from resume import process_resume_upload
     # Fires for every object in the default bucket; resume.py filters to
