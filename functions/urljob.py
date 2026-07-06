@@ -33,6 +33,17 @@ class PostingFacts(BaseModel):
     location: Optional[str] = None
 
 
+def _infer_source(url: str) -> AtsType:
+    """Hosted Greenhouse/Lever postings get their Tier-1 adapter even when
+    found via a career page or pasted by hand."""
+    host = httpx.URL(url).host or ""
+    if "greenhouse.io" in host:
+        return AtsType.GREENHOUSE
+    if "lever.co" in host:
+        return AtsType.LEVER
+    return AtsType.UNKNOWN
+
+
 def create_posting_from_url(db, url: str) -> tuple[str, dict]:
     """Fetch, extract, upsert. Returns (posting_id, posting_dict).
     Raises ValueError with a user-facing message on fetch problems."""
@@ -59,7 +70,7 @@ def create_posting_from_url(db, url: str) -> tuple[str, dict]:
     company = (facts.company or httpx.URL(url).host or "unknown").strip()
 
     posting = JobPosting(
-        source=AtsType.UNKNOWN,
+        source=_infer_source(url),
         external_id=url,
         company=company,
         title=(facts.title or "").strip() or "(title not found)",

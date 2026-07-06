@@ -132,7 +132,11 @@ npm run deploy               # build + firebase deploy --only hosting
    the profile page — apply it, review the fields, and Save. (Nothing is
    written to your live profile without that explicit apply + save.)
 3. Fill in what extraction can't know: writing samples, preferences, salary
-   target, and the company watchlist (all on the same page).
+   target, and the company watchlist (all on the same page). The watchlist
+   takes Greenhouse/Lever board slugs plus arbitrary career-page URLs; the
+   "Find companies for me" box suggests verified boards for a role
+   description. One-off jobs from anywhere can be pasted into the box at
+   the top of the review queue.
 4. Trigger a crawl manually (Cloud Scheduler console → force run) or wait 6h.
 5. Watch applications appear in the review queue.
 

@@ -54,6 +54,7 @@ export default function ProfilePage() {
   const [samples, setSamples] = useState([]);
   const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
   const [leverBoards, setLeverBoards] = useState("");
+  const [customPages, setCustomPages] = useState(""); // career page URLs
   const [suggestRole, setSuggestRole] = useState("");
   const [suggesting, setSuggesting] = useState(false);
   const [suggestions, setSuggestions] = useState([]); // verified boards
@@ -96,6 +97,7 @@ export default function ProfilePage() {
       if (wl.exists()) {
         setGhBoards((wl.data().greenhouse || []).join(", "));
         setLeverBoards((wl.data().lever || []).join(", "));
+        setCustomPages((wl.data().custom || []).join(", "));
       }
       try {
         const meta = await getMetadata(ref(storage, `users/${user.uid}/resume.pdf`));
@@ -135,6 +137,7 @@ export default function ProfilePage() {
     await setDoc(doc(db, "users", user.uid, "watchlist", "companies"), {
       greenhouse: csv(ghBoards),
       lever: csv(leverBoards),
+      custom: csv(customPages),
     });
     setStatus("Saved ✓");
     setTimeout(() => setStatus(""), 2500);
@@ -356,6 +359,12 @@ export default function ProfilePage() {
         <input style={input} value={ghBoards} onChange={e => setGhBoards(e.target.value)} />
         <span style={label}>Lever board slugs (jobs.lever.co/SLUG)</span>
         <input style={input} value={leverBoards} onChange={e => setLeverBoards(e.target.value)} />
+        <span style={label}>
+          Career page URLs (comma-separated — for companies not on Greenhouse/Lever;
+          each crawl finds new postings on these pages. JavaScript-only pages can&apos;t be read.)
+        </span>
+        <input style={input} value={customPages} onChange={e => setCustomPages(e.target.value)}
+               placeholder="https://example.com/careers, https://…" />
 
         <h3 style={{ marginTop: 20 }}>Find companies for me</h3>
         <p style={{ color: T.muted, fontSize: 13 }}>
