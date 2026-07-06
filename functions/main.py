@@ -131,6 +131,37 @@ def suggest_companies(req: https_fn.CallableRequest) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# User-added job by URL: the front door for ATSes the crawler doesn't know.
+# Creates a source=unknown posting (Tier 2 submission) and matches it for
+# the requesting user with the score gate bypassed — they chose it.
+# ---------------------------------------------------------------------------
+
+@https_fn.on_call(timeout_sec=300, secrets=["ANTHROPIC_API_KEY"])
+def add_job_url(req: https_fn.CallableRequest) -> dict:
+    if req.auth is None:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.UNAUTHENTICATED, "sign in first")
+    url = (req.data or {}).get("url", "").strip()
+    if not url.startswith("http"):
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.INVALID_ARGUMENT, "url is required")
+
+    from matching import match_posting_for_user
+    from urljob import create_posting_from_url
+    db = _db()
+    try:
+        posting_id, posting = create_posting_from_url(db, url)
+    except ValueError as exc:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.FAILED_PRECONDITION, str(exc))
+
+    match_posting_for_user(db, req.auth.uid, posting_id, posting, force=True)
+    return {"posting_id": posting_id,
+            "company": posting.get("company"),
+            "title": posting.get("title")}
+
+
+# ---------------------------------------------------------------------------
 # Resume upload -> profile extraction (staged for human review, never applied
 # directly; the profile UI owns the merge)
 # ---------------------------------------------------------------------------

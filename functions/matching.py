@@ -29,13 +29,17 @@ def match_posting_for_user(
     uid: str,
     posting_id: str,
     posting: dict,
+    force: bool = False,
 ) -> None:
+    """force=True (user added this job explicitly): skip the prefilter and
+    the score gate — the job always proceeds to drafting, score recorded
+    for the review UI."""
     user_snap = db.collection("users").document(uid).get()
     if not user_snap.exists:
         return
     profile = UserProfile.model_validate(user_snap.to_dict())
 
-    if not _prefilter(profile, posting):
+    if not force and not _prefilter(profile, posting):
         return
 
     app_id = posting_id  # one application per posting per user; natural dedup
@@ -54,8 +58,10 @@ def match_posting_for_user(
     )
 
     threshold = profile.preferences.min_match_score
-    state = AppState.MATCHED if result.score >= threshold else AppState.REJECTED
-    note = f"score {result.score} vs threshold {threshold}"
+    passed = force or result.score >= threshold
+    state = AppState.MATCHED if passed else AppState.REJECTED
+    note = f"score {result.score} vs threshold {threshold}" + (
+        " (user-added, gate bypassed)" if force else "")
 
     app = Application(
         posting_id=posting_id,

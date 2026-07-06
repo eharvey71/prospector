@@ -7,7 +7,8 @@ import {
   collection, doc, onSnapshot, orderBy, query,
   serverTimestamp, updateDoc, where, arrayUnion,
 } from "firebase/firestore";
-import { auth, db, googleProvider } from "../lib/firebase";
+import { httpsCallable } from "firebase/functions";
+import { auth, db, functions, googleProvider } from "../lib/firebase";
 
 // --- dark palette ---
 export const T = {
@@ -58,6 +59,8 @@ export default function ReviewQueue() {
   const [user, setUser] = useState(null);
   const [apps, setApps] = useState([]);
   const [escalated, setEscalated] = useState([]);
+  const [jobUrl, setJobUrl] = useState("");
+  const [addStatus, setAddStatus] = useState("");
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
@@ -74,6 +77,19 @@ export default function ReviewQueue() {
     );
     return () => { unsub1(); unsub2(); };
   }, [user]);
+
+  async function addJob() {
+    if (!jobUrl.trim()) return;
+    setAddStatus("Reading the posting… (up to a minute)");
+    try {
+      const call = httpsCallable(functions, "add_job_url", { timeout: 300_000 });
+      const res = await call({ url: jobUrl.trim() });
+      setAddStatus(`Added: ${res.data.title} @ ${res.data.company} — drafting now; it will appear above when ready`);
+      setJobUrl("");
+    } catch (e) {
+      setAddStatus(`Couldn't add it: ${e.message}`);
+    }
+  }
 
   async function transition(appId, to, note) {
     const ref = doc(db, "users", user.uid, "applications", appId);
@@ -105,6 +121,23 @@ export default function ReviewQueue() {
       <nav style={{ marginBottom: 20 }}>
         <a href="/profile" style={{ color: T.accent }}>Profile →</a>
       </nav>
+
+      <section style={{ ...card, padding: 14 }}>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            style={{
+              flex: 1, padding: 8, background: T.panelAlt, color: T.text,
+              border: `1px solid ${T.border}`, borderRadius: 6,
+            }}
+            placeholder="Paste any job posting URL — the engine drafts it for review"
+            value={jobUrl}
+            onChange={e => setJobUrl(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && addJob()}
+          />
+          <button style={btnPrimary} onClick={addJob}>Add job</button>
+        </div>
+        {addStatus && <p style={{ color: T.muted, marginBottom: 0 }}>{addStatus}</p>}
+      </section>
 
       <h1>Review queue ({apps.length})</h1>
       {apps.length === 0 && <p style={{ color: T.muted }}>Nothing waiting. The engine will add drafts here.</p>}
