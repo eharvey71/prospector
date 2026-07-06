@@ -40,10 +40,19 @@ class CandidateList(BaseModel):
     candidates: list[CompanyCandidate] = Field(default_factory=list)
 
 
-def suggest_companies(role_description: str, exclude: set[str]) -> list[dict]:
+def suggest_companies(role_description: str, exclude: set[str],
+                      location: str = "", remote_only: bool = False) -> list[dict]:
     """Returns verified boards: [{company, slug, ats, jobs, sample_titles}]"""
+    situation = ""
+    if location:
+        situation += f"\nCandidate location: {location}"
+    if remote_only:
+        situation += "\nRemote roles only: prefer remote-friendly companies."
+    elif location:
+        situation += ("\nPrefer companies with a presence near the candidate "
+                      "or strong remote cultures.")
     proposal = generate_structured(
-        f"Role description:\n{role_description[:1000]}\n\n"
+        f"Role description:\n{role_description[:1000]}\n{situation}\n\n"
         f"Suggest up to {MAX_CANDIDATES} companies.",
         CandidateList,
         system=SUGGEST_SYSTEM,

@@ -113,15 +113,21 @@ def suggest_companies(req: https_fn.CallableRequest) -> dict:
         raise https_fn.HttpsError(
             https_fn.FunctionsErrorCode.INVALID_ARGUMENT, "role is required")
 
+    db = _db()
     # Companies already on the watchlist aren't suggested again.
     wl = (
-        _db().collection("users").document(req.auth.uid)
+        db.collection("users").document(req.auth.uid)
         .collection("watchlist").document("companies").get().to_dict() or {}
     )
     exclude = {s.lower() for s in wl.get("greenhouse", []) + wl.get("lever", [])}
+    profile = db.collection("users").document(req.auth.uid).get().to_dict() or {}
 
     from suggest import suggest_companies as run_suggest
-    return {"companies": run_suggest(role, exclude)}
+    return {"companies": run_suggest(
+        role, exclude,
+        location=profile.get("location") or "",
+        remote_only=bool((profile.get("preferences") or {}).get("remote_only")),
+    )}
 
 
 # ---------------------------------------------------------------------------
