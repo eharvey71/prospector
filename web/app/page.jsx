@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
 import {
-  collection, doc, getDoc, onSnapshot, orderBy, query,
+  collection, doc, getDoc, limit, onSnapshot, orderBy, query,
   serverTimestamp, updateDoc, where, arrayUnion,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
@@ -62,6 +62,8 @@ export default function ReviewQueue() {
   const [jobUrl, setJobUrl] = useState("");
   const [addStatus, setAddStatus] = useState("");
   const [matches, setMatches] = useState([]);       // awaiting manual drafting
+  const [inflight, setInflight] = useState([]);     // approved/queued/submitting
+  const [done, setDone] = useState([]);             // submitted/failed
   const [postings, setPostings] = useState({});     // posting_id -> {title, company}
   const [draftingIds, setDraftingIds] = useState([]);
 
@@ -82,12 +84,22 @@ export default function ReviewQueue() {
       query(base, where("state", "==", "matched"), orderBy("match.score", "desc")),
       (snap) => setMatches(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
     );
-    return () => { unsub1(); unsub2(); unsub3(); };
+    const unsub4 = onSnapshot(
+      query(base, where("state", "in", ["approved", "queued", "submitting"]),
+            orderBy("updatedAt", "desc")),
+      (snap) => setInflight(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+    const unsub5 = onSnapshot(
+      query(base, where("state", "in", ["submitted", "failed"]),
+            orderBy("updatedAt", "desc"), limit(25)),
+      (snap) => setDone(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+    return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
   }, [user]);
 
   // Titles/companies for every card, whatever queue it's in.
   useEffect(() => {
-    [...matches, ...apps, ...escalated].forEach(async (m) => {
+    [...matches, ...apps, ...escalated, ...inflight, ...done].forEach(async (m) => {
       if (!m.posting_id || postings[m.posting_id]) return;
       const snap = await getDoc(doc(db, "jobPostings", m.posting_id));
       if (snap.exists()) {
@@ -95,7 +107,7 @@ export default function ReviewQueue() {
         setPostings(prev => ({ ...prev, [m.posting_id]: { title: p.title, company: p.company } }));
       }
     });
-  }, [matches, apps, escalated]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [matches, apps, escalated, inflight, done]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const jobLine = (a) => postings[a.posting_id]
     ? `${postings[a.posting_id].title} @ ${postings[a.posting_id].company}`
@@ -272,6 +284,48 @@ export default function ReviewQueue() {
               Abandon
             </button>
           </div>
+        </article>
+      ))}
+
+      {inflight.length > 0 && (
+        <>
+          <h1 style={{ marginTop: 40 }}>In flight ({inflight.length})</h1>
+          {inflight.map((a) => (
+            <article key={a.id} style={{ ...card, padding: 12 }}>
+              <strong>{jobLine(a)}</strong>{" "}
+              <span style={{ color: T.accent }}>
+                {a.state === "approved" && "approved — waiting to queue"}
+                {a.state === "queued" && "queued — submission task created"}
+                {a.state === "submitting" && "submitting — browser is filling the form now"}
+              </span>
+            </article>
+          ))}
+        </>
+      )}
+
+      <h1 style={{ marginTop: 40 }}>Done ({done.length})</h1>
+      {done.length === 0 && <p style={{ color: T.muted }}>Nothing finished yet.</p>}
+      {done.map((a) => (
+        <article key={a.id} style={{
+          ...card, padding: 12,
+          borderColor: a.state === "submitted" ? T.ok : T.danger,
+        }}>
+          <strong>{jobLine(a)}</strong>{" "}
+          {a.state === "submitted" ? (
+            <span style={{ color: T.ok }}>
+              ✓ submitted{a.submission?.confirmedAt ? ` — ${new Date(
+                a.submission.confirmedAt.seconds
+                  ? a.submission.confirmedAt.seconds * 1000
+                  : a.submission.confirmedAt).toLocaleString()}` : ""}
+            </span>
+          ) : (
+            <span style={{ color: T.danger }}>✗ failed — {a.submission?.error || "see logs"}</span>
+          )}
+          {(a.submission?.screenshots || []).length > 0 && (
+            <div style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>
+              Screenshots: {(a.submission.screenshots || []).join(", ")}
+            </div>
+          )}
         </article>
       ))}
     </main>
