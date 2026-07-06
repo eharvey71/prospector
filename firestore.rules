@@ -54,6 +54,7 @@ service cloud.firestore {
           // No state change at all (e.g. editing the letter text), or one of
           // the human-owned transitions.
           return (before == after)
+            || (before == 'matched' && after == 'rejected')
             || (before == 'in_review' && after in ['approved', 'rejected'])
             || (before == 'needs_human' && after in ['submitted', 'rejected']);
         }

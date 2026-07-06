@@ -131,6 +131,35 @@ def suggest_companies(req: https_fn.CallableRequest) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Manual drafting: with auto_draft off, the UI requests each letter.
+# ---------------------------------------------------------------------------
+
+@https_fn.on_call(timeout_sec=540, secrets=["ANTHROPIC_API_KEY"])
+def request_draft(req: https_fn.CallableRequest) -> dict:
+    if req.auth is None:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.UNAUTHENTICATED, "sign in first")
+    app_id = (req.data or {}).get("app_id", "").strip()
+    if not app_id:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.INVALID_ARGUMENT, "app_id is required")
+
+    db = _db()
+    app_snap = (
+        db.collection("users").document(req.auth.uid)
+        .collection("applications").document(app_id).get()
+    )
+    if not app_snap.exists or app_snap.to_dict().get("state") != AppState.MATCHED.value:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            "application not found or not awaiting drafting")
+
+    from drafting import draft_application
+    draft_application(db, req.auth.uid, app_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
 # User-added job by URL: the front door for ATSes the crawler doesn't know.
 # Creates a source=unknown posting (Tier 2 submission) and matches it for
 # the requesting user with the score gate bypassed — they chose it.
@@ -198,12 +227,20 @@ def on_application_written(event: firestore_fn.Event) -> None:
     state = AppState(after["state"])
 
     if state == AppState.MATCHED:
+        db = _db()
+        # Manual-drafting mode: matches wait in the UI for a per-application
+        # "write the letter" (request_draft). User-pasted jobs always draft.
+        prefs = (db.collection("users").document(uid).get().to_dict()
+                 or {}).get("preferences") or {}
+        if not prefs.get("auto_draft", True) and not after.get("user_added"):
+            log.info("auto_draft off; app %s waits in matched", app_id)
+            return
         from drafting import draft_application
         try:
-            draft_application(_db(), uid, app_id)
+            draft_application(db, uid, app_id)
         except Exception:
             log.exception("drafting failed uid=%s app=%s", uid, app_id)
-            advance(_db(), uid, app_id, AppState.MATCHED, AppState.FAILED,
+            advance(db, uid, app_id, AppState.MATCHED, AppState.FAILED,
                     note="drafting error; see logs")
 
     elif state == AppState.APPROVED:

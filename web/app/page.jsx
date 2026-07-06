@@ -4,7 +4,7 @@
 import { useEffect, useState } from "react";
 import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
 import {
-  collection, doc, onSnapshot, orderBy, query,
+  collection, doc, getDoc, onSnapshot, orderBy, query,
   serverTimestamp, updateDoc, where, arrayUnion,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
@@ -61,6 +61,9 @@ export default function ReviewQueue() {
   const [escalated, setEscalated] = useState([]);
   const [jobUrl, setJobUrl] = useState("");
   const [addStatus, setAddStatus] = useState("");
+  const [matches, setMatches] = useState([]);       // awaiting manual drafting
+  const [postings, setPostings] = useState({});     // posting_id -> {title, company}
+  const [draftingIds, setDraftingIds] = useState([]);
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
@@ -75,8 +78,24 @@ export default function ReviewQueue() {
       query(base, where("state", "==", "needs_human")),
       (snap) => setEscalated(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
     );
-    return () => { unsub1(); unsub2(); };
+    const unsub3 = onSnapshot(
+      query(base, where("state", "==", "matched"), orderBy("match.score", "desc")),
+      (snap) => setMatches(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+    );
+    return () => { unsub1(); unsub2(); unsub3(); };
   }, [user]);
+
+  // Titles/companies for the matched cards.
+  useEffect(() => {
+    matches.forEach(async (m) => {
+      if (postings[m.posting_id]) return;
+      const snap = await getDoc(doc(db, "jobPostings", m.posting_id));
+      if (snap.exists()) {
+        const p = snap.data();
+        setPostings(prev => ({ ...prev, [m.posting_id]: { title: p.title, company: p.company } }));
+      }
+    });
+  }, [matches]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function addJob() {
     if (!jobUrl.trim()) return;
@@ -88,6 +107,19 @@ export default function ReviewQueue() {
       setJobUrl("");
     } catch (e) {
       setAddStatus(`Couldn't add it: ${e.message}`);
+    }
+  }
+
+  async function writeLetter(appId) {
+    setDraftingIds(ids => [...ids, appId]);
+    try {
+      const call = httpsCallable(functions, "request_draft", { timeout: 540_000 });
+      await call({ app_id: appId });
+      // the card moves to the review queue via the snapshot listeners
+    } catch (e) {
+      setAddStatus(`Drafting failed: ${e.message}`);
+    } finally {
+      setDraftingIds(ids => ids.filter(x => x !== appId));
     }
   }
 
@@ -138,6 +170,43 @@ export default function ReviewQueue() {
         </div>
         {addStatus && <p style={{ color: T.muted, marginBottom: 0 }}>{addStatus}</p>}
       </section>
+
+      {matches.length > 0 && (
+        <>
+          <h1>Matches awaiting a letter ({matches.length})</h1>
+          <p style={{ color: T.muted }}>
+            Auto-draft is off — pick which of these get a cover letter written.
+          </p>
+          {matches.map((m) => (
+            <article key={m.id} style={{ ...card, padding: 14 }}>
+              <strong>
+                {postings[m.posting_id]
+                  ? `${postings[m.posting_id].title} @ ${postings[m.posting_id].company}`
+                  : "…"}
+              </strong>{" "}
+              <span style={{ color: T.muted }}>score {m.match?.score}</span>
+              <ul style={{ margin: "8px 0" }}>
+                {(m.match?.reasons || []).slice(0, 3).map((r, i) => <li key={i}>{r}</li>)}
+              </ul>
+              {(m.match?.red_flags || []).length > 0 && (
+                <p style={{ color: T.danger, fontSize: 13 }}>
+                  Red flags: {(m.match.red_flags || []).join("; ")}
+                </p>
+              )}
+              <button
+                style={btnPrimary}
+                disabled={draftingIds.includes(m.id)}
+                onClick={() => writeLetter(m.id)}
+              >
+                {draftingIds.includes(m.id) ? "Writing… (about a minute)" : "Write the letter"}
+              </button>{" "}
+              <button style={btn} onClick={() => transition(m.id, "rejected", "skipped from matches")}>
+                Skip
+              </button>
+            </article>
+          ))}
+        </>
+      )}
 
       <h1>Review queue ({apps.length})</h1>
       {apps.length === 0 && <p style={{ color: T.muted }}>Nothing waiting. The engine will add drafts here.</p>}

@@ -50,6 +50,7 @@ export default function ProfilePage() {
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [excludeCompanies, setExcludeCompanies] = useState("");
   const [minScore, setMinScore] = useState(70);
+  const [autoDraft, setAutoDraft] = useState(true);
   const [history, setHistory] = useState([]);
   const [samples, setSamples] = useState([]);
   const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
@@ -88,6 +89,7 @@ export default function ProfilePage() {
         setRemoteOnly(!!d.preferences?.remote_only);
         setExcludeCompanies((d.preferences?.exclude_companies || []).join(", "));
         setMinScore(d.preferences?.min_match_score ?? 70);
+        setAutoDraft(d.preferences?.auto_draft ?? true);
         setHistory((d.work_history || []).map(r => ({ ...r, end: r.end || "" })));
         setSamples(d.writing_samples || []);
       } else {
@@ -130,6 +132,7 @@ export default function ProfilePage() {
         remote_only: remoteOnly,
         exclude_companies: csv(excludeCompanies),
         min_match_score: Number(minScore) || 70,
+        auto_draft: autoDraft,
       },
       updatedAt: serverTimestamp(),
     };
@@ -347,6 +350,17 @@ export default function ProfilePage() {
         <span style={label}>Minimum match score (0-100)</span>
         <input style={input} type="number" min="0" max="100" value={minScore}
                onChange={e => setMinScore(e.target.value)} />
+        <p style={{ color: T.warn, fontSize: 13, marginTop: -6 }}>
+          Every crawled posting scoring at or above this becomes a match.
+          With auto-draft ON, each match immediately gets a cover letter
+          written (several LLM calls each) — lower this carefully.
+        </p>
+        <label style={{ display: "block", marginBottom: 8 }}>
+          <input type="checkbox" checked={autoDraft}
+                 onChange={e => setAutoDraft(e.target.checked)} /> Draft letters
+          automatically <span style={{ color: T.muted, fontSize: 13 }}>
+          (off: matches wait in the review page and you pick which get letters)</span>
+        </label>
         <label style={{ display: "block", marginBottom: 8 }}>
           <input type="checkbox" checked={remoteOnly}
                  onChange={e => setRemoteOnly(e.target.checked)} /> Remote only

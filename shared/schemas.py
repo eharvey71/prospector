@@ -81,6 +81,8 @@ class Preferences(BaseModel):
     remote_only: bool = False
     exclude_companies: list[str] = Field(default_factory=list)
     min_match_score: int = 70       # 0-100 gate before drafting
+    auto_draft: bool = True         # False: matches wait for a manual
+                                    # "write the letter" per application
 
 
 class UserProfile(BaseModel):
@@ -159,6 +161,7 @@ class StateEvent(BaseModel):
 
 class Application(BaseModel):
     posting_id: str
+    user_added: bool = False        # pasted by the user: skip gates, always draft
     state: AppState = AppState.DISCOVERED
     state_history: list[StateEvent] = Field(default_factory=list)
     match: Optional[MatchResult] = None

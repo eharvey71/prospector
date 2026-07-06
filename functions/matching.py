@@ -65,6 +65,7 @@ def match_posting_for_user(
 
     app = Application(
         posting_id=posting_id,
+        user_added=force,
         state=state,
         state_history=[
             StateEvent(state=AppState.DISCOVERED, note="created by matcher"),
