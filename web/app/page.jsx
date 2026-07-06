@@ -85,17 +85,21 @@ export default function ReviewQueue() {
     return () => { unsub1(); unsub2(); unsub3(); };
   }, [user]);
 
-  // Titles/companies for the matched cards.
+  // Titles/companies for every card, whatever queue it's in.
   useEffect(() => {
-    matches.forEach(async (m) => {
-      if (postings[m.posting_id]) return;
+    [...matches, ...apps, ...escalated].forEach(async (m) => {
+      if (!m.posting_id || postings[m.posting_id]) return;
       const snap = await getDoc(doc(db, "jobPostings", m.posting_id));
       if (snap.exists()) {
         const p = snap.data();
         setPostings(prev => ({ ...prev, [m.posting_id]: { title: p.title, company: p.company } }));
       }
     });
-  }, [matches]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [matches, apps, escalated]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const jobLine = (a) => postings[a.posting_id]
+    ? `${postings[a.posting_id].title} @ ${postings[a.posting_id].company}`
+    : "…";
 
   async function addJob() {
     if (!jobUrl.trim()) return;
@@ -179,11 +183,7 @@ export default function ReviewQueue() {
           </p>
           {matches.map((m) => (
             <article key={m.id} style={{ ...card, padding: 14 }}>
-              <strong>
-                {postings[m.posting_id]
-                  ? `${postings[m.posting_id].title} @ ${postings[m.posting_id].company}`
-                  : "…"}
-              </strong>{" "}
+              <strong>{jobLine(m)}</strong>{" "}
               <span style={{ color: T.muted }}>score {m.match?.score}</span>
               <ul style={{ margin: "8px 0" }}>
                 {(m.match?.reasons || []).slice(0, 3).map((r, i) => <li key={i}>{r}</li>)}
@@ -213,6 +213,7 @@ export default function ReviewQueue() {
       {apps.map((a) => (
         <article key={a.id} style={card}>
           <header>
+            <h2 style={{ margin: "0 0 4px" }}>{jobLine(a)}</h2>
             <strong>Match score: {a.match?.score}</strong>
             <ul>{(a.match?.reasons || []).map((r, i) => <li key={i}>{r}</li>)}</ul>
             {(a.match?.red_flags || []).length > 0 && (
@@ -244,6 +245,7 @@ export default function ReviewQueue() {
       {escalated.length === 0 && <p style={{ color: T.muted }}>No escalations.</p>}
       {escalated.map((a) => (
         <article key={a.id} style={{ ...card, borderColor: T.warn }}>
+          <h2 style={{ margin: "0 0 4px" }}>{jobLine(a)}</h2>
           <p><strong style={{ color: T.warn }}>Why:</strong> {a.submission?.error || "escalated"}</p>
           {(a.submission?.screenshots || []).length > 0 && (
             <p style={{ fontSize: 13, color: T.muted }}>
