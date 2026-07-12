@@ -90,8 +90,14 @@ export default function ProfilePage() {
         setExcludeCompanies((d.preferences?.exclude_companies || []).join(", "));
         setMinScore(d.preferences?.min_match_score ?? 70);
         setAutoDraft(d.preferences?.auto_draft ?? true);
-        setHistory((d.work_history || []).map(r => ({ ...r, end: r.end || "" })));
-        setSamples(d.writing_samples || []);
+        setHistory((d.work_history || []).map(r => ({
+          company: r.company || "", title: r.title || "",
+          start: r.start || "", end: r.end || "",
+          bullets: Array.isArray(r.bullets) && r.bullets.length ? r.bullets : [""],
+        })));
+        setSamples((d.writing_samples || []).map(s => ({
+          title: s.title || "", text: s.text || "",
+        })));
       } else {
         setEmail(user.email || "");
       }
@@ -124,7 +130,7 @@ export default function ProfilePage() {
       work_history: history.map(r => ({
         company: r.company, title: r.title, start: r.start,
         end: r.end || null,
-        bullets: r.bullets.filter(Boolean),
+        bullets: (r.bullets || []).filter(Boolean),
       })),
       writing_samples: samples.filter(s => s.title || s.text),
       preferences: {
@@ -305,7 +311,7 @@ export default function ProfilePage() {
             <span style={label}>Bullets (one per line — these are the facts letters can use)</span>
             <textarea
               style={{ ...input, height: 110 }}
-              value={r.bullets.join("\n")}
+              value={(r.bullets || []).join("\n")}
               onChange={e => setRole(i, { bullets: e.target.value.split("\n") })}
             />
             <button style={btn} onClick={() => setHistory(h => h.filter((_, j) => j !== i))}>
