@@ -47,14 +47,17 @@ ATS_FINGERPRINTS: list[tuple[str, str, bool]] = [
 
 RESOLVE_SYSTEM = """You identify how a company runs its job applications. \
 Given a company name, provide: likely Greenhouse/Lever board slugs (lowercase, \
-no spaces — often the company name), the company's main careers page URL, and \
-the ATS vendor you believe they use if you know it. Only state facts you're \
-reasonably confident about; leave a field empty otherwise."""
+no spaces — often the company name), the company's main careers page URL, the \
+full Workday URL if they use Workday (looks like \
+https://<tenant>.wd<N>.myworkdayjobs.com/<Site>), and the ATS vendor you \
+believe they use. Only state facts you're reasonably confident about; leave a \
+field empty otherwise."""
 
 
 class CompanyResolution(BaseModel):
     slugs: list[str] = Field(default_factory=list)
     careers_url: str | None = None
+    workday_url: str | None = None   # full myworkdayjobs.com URL, if known
     known_ats: str | None = None
 
 
@@ -86,28 +89,43 @@ def track_company(db: firestore.Client, uid: str, name: str) -> dict:
                                    f"On {kind} ({hit['jobs']} open roles) — fully "
                                    f"automated, added to your watchlist.")
 
-        # 2. Careers page: fetch, fingerprint the ATS.
+        # 2. Workday URL the LLM supplied directly (helps JS-rendered careers
+        #    pages we can't fingerprint, e.g. big enterprise portals).
+        if resolution.workday_url and _parse_workday_url(resolution.workday_url):
+            _add_to_watchlist(db, uid, "workday", resolution.workday_url)
+            return _result(name, "manual", "workday", resolution.workday_url,
+                           "On Workday. Jobs will be discovered and drafted "
+                           "automatically; you submit the final step yourself "
+                           "(Workday requires an account).")
+
+        # 3. Careers page: fetch, fingerprint the ATS.
         careers = resolution.careers_url
         if careers:
-            ats, submittable, final_url = _fingerprint_page(client, careers)
+            ats, submittable, ats_url = _fingerprint_page(client, careers)
             # A careers page may itself embed a Greenhouse/Lever board.
             if ats in ("greenhouse", "lever"):
-                slug = _slug_from_url(final_url, ats)
+                slug = _slug_from_url(ats_url, ats)
                 if slug and (probe := (_probe_greenhouse if ats == "greenhouse"
                                        else _probe_lever)(client, slug)):
                     _add_to_watchlist(db, uid, ats, slug)
                     return _result(name, "auto", ats, slug,
                                    f"Careers page runs on {ats} — fully automated.")
 
-            # Workday exposes a public JSON API — register the careers URL in
-            # the workday list so discovery pulls its jobs; submission stays
-            # manual (no adapter -> escalates with the prepared application).
+            # Workday exposes a public JSON API — register the actual
+            # myworkdayjobs URL (extracted from the page, not the landing
+            # page) so discovery pulls its jobs; submission stays manual.
             if ats == "workday":
-                _add_to_watchlist(db, uid, "workday", final_url)
-                return _result(name, "manual", ats, final_url,
-                               "On Workday. Jobs will be discovered and drafted "
-                               "automatically; you submit the final step yourself "
-                               "(Workday requires an account).")
+                if ats_url and _parse_workday_url(ats_url):
+                    _add_to_watchlist(db, uid, "workday", ats_url)
+                    return _result(name, "manual", ats, ats_url,
+                                   "On Workday. Jobs will be discovered and "
+                                   "drafted automatically; you submit the final "
+                                   "step yourself (Workday requires an account).")
+                return _result(name, "manual", ats, careers,
+                               "Detected Workday but couldn't locate the board "
+                               "URL automatically. Open their careers page, copy "
+                               "the myworkdayjobs.com URL, and paste it into the "
+                               "Workday field below.")
 
             _add_to_watchlist(db, uid, "custom", careers)
             if ats and not submittable:
@@ -129,19 +147,38 @@ def track_company(db: firestore.Client, uid: str, name: str) -> dict:
 
 
 def _fingerprint_page(client: httpx.Client, url: str) -> tuple[str | None, bool, str]:
+    """Returns (ats_label, submittable, ats_url). ats_url is the ATS-specific
+    URL extracted from the page (e.g. the embedded myworkdayjobs.com link),
+    falling back to the fetched page's final URL."""
     if not url.startswith("http"):
         url = "https://" + url
     try:
         resp = client.get(url)
         final = str(resp.url)
-        hay = (final + " " + resp.text[:200_000]).lower()
+        text = final + " " + resp.text[:200_000]   # case preserved for extraction
     except httpx.HTTPError as exc:
         log.warning("careers fetch %s failed: %s", url, exc)
         return None, False, url
+    hay = text.lower()
     for marker, label, submittable in ATS_FINGERPRINTS:
         if marker in hay:
-            return label, submittable, final
+            return label, submittable, (_extract_ats_url(text, label) or final)
     return None, False, final
+
+
+def _extract_ats_url(text: str, ats: str) -> str | None:
+    """Pull the ATS-specific URL out of page HTML (case preserved — Workday
+    site names are case-sensitive)."""
+    pats = {
+        "workday": r"https?://[A-Za-z0-9-]+\.[A-Za-z0-9-]+\.myworkdayjobs\.com/[^\s\"'<>\\)]*",
+        "greenhouse": r"https?://boards\.greenhouse\.io/[^\s\"'<>\\)]*",
+        "lever": r"https?://jobs\.lever\.co/[^\s\"'<>\\)]*",
+    }
+    pat = pats.get(ats)
+    if not pat:
+        return None
+    m = re.search(pat, text)
+    return m.group(0) if m else None
 
 
 def _slug_from_url(url: str, ats: str) -> str | None:
