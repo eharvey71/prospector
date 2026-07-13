@@ -134,6 +134,24 @@ def suggest_companies(req: https_fn.CallableRequest) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Track a company by name: resolve its ATS and register it automatically.
+# ---------------------------------------------------------------------------
+
+@https_fn.on_call(timeout_sec=120, secrets=["ANTHROPIC_API_KEY"])
+def track_company(req: https_fn.CallableRequest) -> dict:
+    if req.auth is None:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.UNAUTHENTICATED, "sign in first")
+    name = (req.data or {}).get("name", "").strip()
+    if not name:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.INVALID_ARGUMENT, "name is required")
+
+    from track import track_company as run_track
+    return run_track(_db(), req.auth.uid, name)
+
+
+# ---------------------------------------------------------------------------
 # Manual drafting: with auto_draft off, the UI requests each letter.
 # ---------------------------------------------------------------------------
 

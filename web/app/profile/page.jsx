@@ -59,6 +59,9 @@ export default function ProfilePage() {
   const [suggestRole, setSuggestRole] = useState("");
   const [suggesting, setSuggesting] = useState(false);
   const [suggestions, setSuggestions] = useState([]); // verified boards
+  const [trackName, setTrackName] = useState("");
+  const [tracking, setTracking] = useState(false);
+  const [trackResults, setTrackResults] = useState([]); // resolution reports
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
@@ -187,6 +190,28 @@ export default function ProfilePage() {
 
   async function dismissExtraction() {
     await deleteDoc(doc(db, "users", user.uid, "resume_extraction", "latest"));
+  }
+
+  async function trackCompany() {
+    if (!trackName.trim()) return;
+    setTracking(true);
+    try {
+      const call = httpsCallable(functions, "track_company", { timeout: 120_000 });
+      const res = await call({ name: trackName.trim() });
+      setTrackResults(prev => [res.data, ...prev]);
+      // Reflect the new watchlist entry in the fields below.
+      const wl = await getDoc(doc(db, "users", user.uid, "watchlist", "companies"));
+      if (wl.exists()) {
+        setGhBoards((wl.data().greenhouse || []).join(", "));
+        setLeverBoards((wl.data().lever || []).join(", "));
+        setCustomPages((wl.data().custom || []).join(", "));
+      }
+      setTrackName("");
+    } catch (e) {
+      setTrackResults(prev => [{ company: trackName, status: "error", detail: e.message }, ...prev]);
+    } finally {
+      setTracking(false);
+    }
   }
 
   async function findCompanies() {
@@ -375,6 +400,39 @@ export default function ProfilePage() {
 
       <section style={box}>
         <h2>Company watchlist</h2>
+
+        <h3 style={{ marginTop: 0 }}>Track a company by name</h3>
+        <p style={{ color: T.muted, fontSize: 13 }}>
+          Type a company (e.g. Pearson). The engine finds how they run job
+          applications and sets up what it can — no need to know their ATS.
+        </p>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input style={{ ...input, margin: 0 }} value={trackName}
+                 placeholder="Company name"
+                 onChange={e => setTrackName(e.target.value)}
+                 onKeyDown={e => e.key === "Enter" && trackCompany()} />
+          <button style={btnPrimary} disabled={tracking} onClick={trackCompany}>
+            {tracking ? "Resolving…" : "Track"}
+          </button>
+        </div>
+        {trackResults.map((r, i) => {
+          const color = r.status === "auto" ? T.ok
+            : r.status === "tracked" ? T.accent
+            : r.status === "manual" ? T.warn : T.danger;
+          const tag = r.status === "auto" ? "✓ automated"
+            : r.status === "tracked" ? "tracking"
+            : r.status === "manual" ? "manual submit"
+            : r.status === "not_found" ? "not found" : "error";
+          return (
+            <div key={i} style={{ borderLeft: `3px solid ${color}`, padding: "6px 10px", margin: "8px 0", background: T.panelAlt, borderRadius: 4 }}>
+              <strong>{r.company}</strong>{" "}
+              <span style={{ color, fontSize: 13 }}>{tag}</span>
+              <div style={{ color: T.muted, fontSize: 13 }}>{r.detail}</div>
+            </div>
+          );
+        })}
+
+        <h3 style={{ marginTop: 24 }}>Or enter boards manually</h3>
         <span style={label}>Greenhouse board slugs (comma-separated — the SLUG in boards.greenhouse.io/SLUG)</span>
         <input style={input} value={ghBoards} onChange={e => setGhBoards(e.target.value)} />
         <span style={label}>Lever board slugs (jobs.lever.co/SLUG)</span>
