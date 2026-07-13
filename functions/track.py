@@ -21,6 +21,7 @@ import httpx
 from google.cloud import firestore
 from pydantic import BaseModel, Field
 
+from discovery import _parse_workday_url
 from llm import generate_structured
 from suggest import _probe_greenhouse, _probe_lever
 
