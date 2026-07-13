@@ -56,6 +56,7 @@ def transition_allowed(before: AppState, after: AppState) -> bool:
 class AtsType(str, Enum):
     GREENHOUSE = "greenhouse"
     LEVER = "lever"
+    WORKDAY = "workday"        # discovery only; submission is login-walled (manual)
     UNKNOWN = "unknown"
 
 

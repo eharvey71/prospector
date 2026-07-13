@@ -99,11 +99,22 @@ def track_company(db: firestore.Client, uid: str, name: str) -> dict:
                     return _result(name, "auto", ats, slug,
                                    f"Careers page runs on {ats} — fully automated.")
 
+            # Workday exposes a public JSON API — register the careers URL in
+            # the workday list so discovery pulls its jobs; submission stays
+            # manual (no adapter -> escalates with the prepared application).
+            if ats == "workday":
+                _add_to_watchlist(db, uid, "workday", final_url)
+                return _result(name, "manual", ats, final_url,
+                               "On Workday. Jobs will be discovered and drafted "
+                               "automatically; you submit the final step yourself "
+                               "(Workday requires an account).")
+
             _add_to_watchlist(db, uid, "custom", careers)
             if ats and not submittable:
                 return _result(name, "manual", ats, careers,
-                               f"Uses {ats} (login-wall). Jobs will be discovered "
-                               f"and drafted; you submit the final step yourself.")
+                               f"Uses {ats} (login-wall). The careers page is "
+                               f"tracked for drafting; you submit yourself. If it's "
+                               f"JavaScript-only, paste specific job URLs instead.")
             if ats:
                 return _result(name, "tracked", ats, careers,
                                f"Uses {ats}. Tracking the careers page; submission "

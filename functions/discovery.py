@@ -7,7 +7,13 @@ re-runs are natural dedup.
 
 Watchlist doc shape (users/{uid}/watchlist/companies):
     { "greenhouse": ["anthropic", "stripe"], "lever": ["plaid"],
-      "custom": ["https://acmerobotics.com/careers"] }
+      "custom": ["https://acmerobotics.com/careers"],
+      "workday": ["https://pearson.wd3.myworkdayjobs.com/en-US/Pearson_Careers"] }
+
+Workday: read via the public CxS JSON API (no login needed to browse), so
+big enterprise boards flow through discovery + drafting. Submission stays
+manual — source=workday has no adapter, so the worker escalates a prepared
+application to needs_human.
 
 Custom career pages: the page's links are collected, an LLM picks which
 ones are individual job postings, and only NEW links (no posting with that
@@ -37,6 +43,8 @@ LEVER_URL = "https://api.lever.co/v0/postings/{board}?mode=json"
 HTTP_TIMEOUT = 20.0
 MAX_LINKS_TO_CLASSIFY = 150   # anchors handed to the LLM per career page
 MAX_NEW_PER_PAGE = 15         # new postings ingested per page per crawl
+WORKDAY_PAGE = 20             # CxS page size (server max)
+MAX_WORKDAY_JOBS = 80         # cap per Workday board per crawl
 
 LINK_SYSTEM = """You are given links found on a company's careers page. \
 Return the hrefs that point to INDIVIDUAL job postings — not category \
@@ -59,17 +67,21 @@ def run_discovery(db: firestore.Client) -> int:
             count += _upsert_all(db, _fetch_lever(client, board))
         for page_url in sorted(boards.get("custom", set())):
             count += _crawl_career_page(db, client, page_url)
+        for wd_url in sorted(boards.get("workday", set())):
+            count += _upsert_all(db, _fetch_workday(client, wd_url))
     log.info("discovery complete: %d postings upserted", count)
     return count
 
 
 def _collect_watchlists(db: firestore.Client) -> dict[str, set[str]]:
-    boards: dict[str, set[str]] = {"greenhouse": set(), "lever": set(), "custom": set()}
+    boards: dict[str, set[str]] = {
+        "greenhouse": set(), "lever": set(), "custom": set(), "workday": set()}
     for doc in db.collection_group("watchlist").stream():
         data = doc.to_dict() or {}
         boards["greenhouse"].update(data.get("greenhouse", []))
         boards["lever"].update(data.get("lever", []))
         boards["custom"].update(data.get("custom", []))
+        boards["workday"].update(data.get("workday", []))
     return boards
 
 
@@ -181,6 +193,84 @@ def _fetch_lever(client: httpx.Client, board: str) -> list[JobPosting]:
             description_text=_strip_html(job.get("descriptionPlain") or job.get("description", "")),
         ))
     return postings
+
+
+# ---------------------------------------------------------------------------
+# Workday (public CxS JSON API)
+# ---------------------------------------------------------------------------
+
+def _parse_workday_url(url: str) -> tuple[str, str, str] | None:
+    """A myworkdayjobs careers URL -> (host, tenant, site).
+
+    https://pearson.wd3.myworkdayjobs.com/en-US/Pearson_Careers
+        -> ("pearson.wd3.myworkdayjobs.com", "pearson", "Pearson_Careers")
+    The optional locale segment (en-US / en_US) is skipped.
+    """
+    m = re.match(r"https?://(([a-z0-9-]+)\.[a-z0-9-]+\.myworkdayjobs\.com)(/.*)?",
+                 url.strip(), re.I)
+    if not m:
+        return None
+    host, tenant = m.group(1), m.group(2)
+    segments = [s for s in (m.group(3) or "").split("/") if s]
+    if segments and re.fullmatch(r"[a-z]{2}[-_][A-Za-z]{2}", segments[0]):
+        segments = segments[1:]
+    if not segments:
+        return None
+    return host, tenant, segments[0]
+
+
+def _fetch_workday(client: httpx.Client, url: str) -> list[JobPosting]:
+    parsed = _parse_workday_url(url)
+    if not parsed:
+        log.warning("workday url %s not recognized", url)
+        return []
+    host, tenant, site = parsed
+    cxs = f"https://{host}/wday/cxs/{tenant}/{site}"
+
+    postings: list[JobPosting] = []
+    offset = 0
+    while offset < MAX_WORKDAY_JOBS:
+        try:
+            resp = client.post(f"{cxs}/jobs", json={
+                "appliedFacets": {}, "limit": WORKDAY_PAGE,
+                "offset": offset, "searchText": "",
+            })
+            resp.raise_for_status()
+            data = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            log.warning("workday %s page %d failed: %s", tenant, offset, exc)
+            break
+        batch = data.get("jobPostings", [])
+        if not batch:
+            break
+        for job in batch:
+            ext_path = job.get("externalPath", "")
+            if not ext_path:
+                continue
+            postings.append(JobPosting(
+                source=AtsType.WORKDAY,
+                external_id=ext_path,
+                company=tenant,
+                title=job.get("title", ""),
+                url=f"https://{host}/{site}{ext_path}",
+                location=job.get("locationsText"),
+                description_text=_workday_description(client, cxs, ext_path),
+            ))
+        offset += WORKDAY_PAGE
+        if offset >= data.get("total", 0):
+            break
+    log.info("workday %s: %d postings", tenant, len(postings))
+    return postings
+
+
+def _workday_description(client: httpx.Client, cxs: str, ext_path: str) -> str:
+    try:
+        resp = client.get(f"{cxs}{ext_path}")
+        resp.raise_for_status()
+        info = resp.json().get("jobPostingInfo", {})
+        return _strip_html(info.get("jobDescription", ""))
+    except (httpx.HTTPError, ValueError):
+        return ""
 
 
 def _upsert_all(db: firestore.Client, postings: list[JobPosting]) -> int:

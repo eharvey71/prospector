@@ -61,7 +61,13 @@ async def submit(request: Request) -> dict:
 
     adapter = get_adapter(task.ats_type)
     if adapter is None:
-        _escalate(task, "no adapter for this ATS")
+        reason = (
+            "Workday requires an account — application prepared, submit it "
+            "yourself at the job URL"
+            if task.ats_type == AtsType.WORKDAY
+            else f"no automated adapter for {task.ats_type.value} — submit manually"
+        )
+        _escalate(task, reason)
         return {"status": "needs_human"}
 
     app_ref = (

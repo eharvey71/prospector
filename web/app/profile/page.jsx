@@ -56,6 +56,7 @@ export default function ProfilePage() {
   const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
   const [leverBoards, setLeverBoards] = useState("");
   const [customPages, setCustomPages] = useState(""); // career page URLs
+  const [workdaySites, setWorkdaySites] = useState(""); // myworkdayjobs URLs
   const [suggestRole, setSuggestRole] = useState("");
   const [suggesting, setSuggesting] = useState(false);
   const [suggestions, setSuggestions] = useState([]); // verified boards
@@ -109,6 +110,7 @@ export default function ProfilePage() {
         setGhBoards((wl.data().greenhouse || []).join(", "));
         setLeverBoards((wl.data().lever || []).join(", "));
         setCustomPages((wl.data().custom || []).join(", "));
+        setWorkdaySites((wl.data().workday || []).join(", "));
       }
       try {
         const meta = await getMetadata(ref(storage, `users/${user.uid}/resume.pdf`));
@@ -150,6 +152,7 @@ export default function ProfilePage() {
       greenhouse: csv(ghBoards),
       lever: csv(leverBoards),
       custom: csv(customPages),
+      workday: csv(workdaySites),
     });
     setStatus("Saved ✓");
     setTimeout(() => setStatus(""), 2500);
@@ -205,6 +208,7 @@ export default function ProfilePage() {
         setGhBoards((wl.data().greenhouse || []).join(", "));
         setLeverBoards((wl.data().lever || []).join(", "));
         setCustomPages((wl.data().custom || []).join(", "));
+        setWorkdaySites((wl.data().workday || []).join(", "));
       }
       setTrackName("");
     } catch (e) {
@@ -443,6 +447,12 @@ export default function ProfilePage() {
         </span>
         <input style={input} value={customPages} onChange={e => setCustomPages(e.target.value)}
                placeholder="https://example.com/careers, https://…" />
+        <span style={label}>
+          Workday career sites (comma-separated myworkdayjobs.com URLs — jobs are
+          discovered and drafted; Workday submission stays manual)
+        </span>
+        <input style={input} value={workdaySites} onChange={e => setWorkdaySites(e.target.value)}
+               placeholder="https://company.wd5.myworkdayjobs.com/External" />
 
         <h3 style={{ marginTop: 20 }}>Find companies for me</h3>
         <p style={{ color: T.muted, fontSize: 13 }}>
