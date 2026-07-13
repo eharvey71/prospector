@@ -62,8 +62,11 @@ def _db() -> firestore.Client:
 # Discovery (scheduled)
 # ---------------------------------------------------------------------------
 
-@scheduler_fn.on_schedule(schedule="every 6 hours", timeout_sec=540)
+@scheduler_fn.on_schedule(schedule="every 6 hours", timeout_sec=540,
+                          secrets=["ANTHROPIC_API_KEY"])
 def crawl_boards(event: scheduler_fn.ScheduledEvent) -> None:
+    # Needs the LLM secret because custom career-page crawling classifies
+    # links with generate_structured (see discovery._crawl_career_page).
     from discovery import run_discovery
     run_discovery(_db())
 
