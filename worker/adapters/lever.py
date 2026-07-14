@@ -19,6 +19,7 @@ Form anatomy driven here:
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 from playwright.async_api import async_playwright
@@ -51,6 +52,14 @@ class LeverAdapter(SubmissionAdapter):
         current_org = next(
             (w.get("company", "") for w in (profile.get("work_history")
              or prof.get("work_history") or []) if not w.get("end")), "")
+        screeners = profile.get("screeners") or prof.get("screeners") or {}
+
+        # Everything filled or left open, reported back on escalation so the
+        # human finishes the form from a checklist.
+        sheet: list[dict] = []
+
+        def note(field_label: str, value, status: str = "filled") -> None:
+            sheet.append({"field": field_label, "value": value, "status": status})
 
         apply_url = job_url.rstrip("/")
         if not apply_url.endswith("/apply"):
@@ -69,21 +78,28 @@ class LeverAdapter(SubmissionAdapter):
                     )
 
                 # --- core fields (Lever uses one full-name input) ---
-                await self._fill(page, "input[name='name']", name)
-                await self._fill(page, "input[name='email']",
-                                 profile.get("email") or prof.get("email", ""))
-                await self._fill(page, "input[name='phone']", prof.get("phone", ""))
-                await self._fill(page, "input[name='org']", current_org)
+                email = profile.get("email") or prof.get("email", "")
+                phone = prof.get("phone", "")
+                if await self._fill(page, "input[name='name']", name):
+                    note("Full name", name)
+                if await self._fill(page, "input[name='email']", email):
+                    note("Email", email)
+                if await self._fill(page, "input[name='phone']", phone):
+                    note("Phone", phone)
+                if await self._fill(page, "input[name='org']", current_org):
+                    note("Current company", current_org)
                 # Location is a typeahead; fill the text and dismiss any
                 # suggestion dropdown — Lever accepts the raw text.
                 if await self._fill(page, "input[name='location']", location):
                     await page.keyboard.press("Escape")
+                    note("Location", location)
 
                 # --- resume ---
                 resume_path = await fetch_resume(uid, name)
                 resume_input = page.locator("input[name='resume']").first
                 if resume_path and await resume_input.count() > 0:
                     await resume_input.set_input_files(resume_path)
+                    note("Resume", os.path.basename(resume_path))
                     # Lever uploads the file async and shows a success mark;
                     # give it a moment but don't fail the run over the badge.
                     try:
@@ -102,22 +118,30 @@ class LeverAdapter(SubmissionAdapter):
 
                 # --- cover letter -> Additional information ---
                 if letter:
-                    await self._fill(page, "textarea[name='comments']", letter)
+                    if await self._fill(page, "textarea[name='comments']", letter):
+                        note("Cover letter (Additional information)",
+                             "entered (full text on this card)")
 
                 # --- custom questions: selects + radio lists only ---
                 answered, unanswerable = await self._handle_questions(
                     page, location=location, work_auth=work_auth,
+                    screeners=screeners,
                 )
-                log.info("questions answered=%s unanswerable=%s", answered, unanswerable)
+                for lbl, ans in answered:
+                    note(lbl, ans)
+                log.info("questions answered=%s unanswerable=%s",
+                         [l for l, _ in answered], unanswerable)
 
                 # --- required fields still empty -> escalate ---
                 unmapped = await self._unmapped_required(page)
                 if unmapped or unanswerable:
                     remaining = unanswerable + [u for u in unmapped if u not in unanswerable]
+                    for u in remaining:
+                        note(u, None, "needs_you")
                     shots.append(await take_screenshot(page, uid, app_id, "unmapped"))
                     return SubmissionOutcome(
                         success=False, tier=self.tier, escalate=True,
-                        screenshots=shots,
+                        screenshots=shots, fill_sheet=sheet,
                         reason="required fields need a human: "
                                + ", ".join(remaining[:8]),
                     )
@@ -128,7 +152,7 @@ class LeverAdapter(SubmissionAdapter):
                     log.info("DRY RUN — not submitting %s", apply_url)
                     return SubmissionOutcome(
                         success=False, tier=self.tier, escalate=True,
-                        screenshots=shots,
+                        screenshots=shots, fill_sheet=sheet,
                         reason="dry run: form fully filled, submission skipped "
                                "(set SUBMIT_DRY_RUN=false to go live)",
                     )
@@ -164,9 +188,10 @@ class LeverAdapter(SubmissionAdapter):
     # boxes are never answered — agreeing to something is a human's call.
     # ------------------------------------------------------------------
 
-    async def _handle_questions(self, page, *, location: str, work_auth: str
-                                ) -> tuple[list[str], list[str]]:
-        answered: list[str] = []
+    async def _handle_questions(self, page, *, location: str, work_auth: str,
+                                screeners: dict | None = None,
+                                ) -> tuple[list[tuple[str, str]], list[str]]:
+        answered: list[tuple[str, str]] = []   # (label, answer given)
         unanswerable: list[str] = []
 
         blocks = page.locator(
@@ -194,25 +219,27 @@ class LeverAdapter(SubmissionAdapter):
                     "input[type='text'], input[type='number'], textarea"
                 ).first
 
-                answer = decide_standard_answer(label, location, work_auth)
+                answer = decide_standard_answer(label, location, work_auth, screeners)
 
                 if await select.count() > 0:
                     if answer is None:
                         if required:
                             unanswerable.append(short)
                         continue
-                    ok = await self._pick_select(select, answer)
-                    (answered if ok else unanswerable).append(
-                        short if ok else short + " (could not verify selection)")
+                    if await self._pick_select(select, answer):
+                        answered.append((short, answer))
+                    else:
+                        unanswerable.append(short + " (could not verify selection)")
 
                 elif await radios.count() > 0:
                     if answer is None:
                         if required:
                             unanswerable.append(short)
                         continue
-                    ok = await self._pick_radio(block, radios, answer)
-                    (answered if ok else unanswerable).append(
-                        short if ok else short + " (could not verify selection)")
+                    if await self._pick_radio(block, radios, answer):
+                        answered.append((short, answer))
+                    else:
+                        unanswerable.append(short + " (could not verify selection)")
 
                 elif await texts.count() > 0:
                     # Free-text custom question: no deterministic answer.

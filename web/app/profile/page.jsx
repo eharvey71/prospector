@@ -32,6 +32,9 @@ export default function ProfilePage() {
   const [skills, setSkills] = useState("");           // comma-separated in UI
   const [history, setHistory] = useState([]);
   const [samples, setSamples] = useState([]);
+  // Standard screeners: "" = not set (question escalates), "yes"/"no"
+  const [relocation, setRelocation] = useState("");
+  const [onsite, setOnsite] = useState("");
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
@@ -66,6 +69,9 @@ export default function ProfilePage() {
         setSamples((d.writing_samples || []).map(s => ({
           title: s.title || "", text: s.text || "",
         })));
+        const tri = (v) => (v === true ? "yes" : v === false ? "no" : "");
+        setRelocation(tri(d.screeners?.open_to_relocation));
+        setOnsite(tri(d.screeners?.onsite_ok));
       } else {
         setEmail(user.email || "");
       }
@@ -95,6 +101,10 @@ export default function ProfilePage() {
         bullets: (r.bullets || []).filter(Boolean),
       })),
       writing_samples: samples.filter(s => s.title || s.text),
+      screeners: {
+        open_to_relocation: relocation === "" ? null : relocation === "yes",
+        onsite_ok: onsite === "" ? null : onsite === "yes",
+      },
       updatedAt: serverTimestamp(),
     };
     await setDoc(doc(db, "users", user.uid), profile, { merge: true });
@@ -180,6 +190,28 @@ export default function ProfilePage() {
         <input style={input} value={salaryTarget} onChange={e => setSalaryTarget(e.target.value)} />
         <span style={label}>Skills (comma-separated)</span>
         <textarea style={{ ...input, height: 70 }} value={skills} onChange={e => setSkills(e.target.value)} />
+      </section>
+
+      <section style={box}>
+        <h2>Standard application answers</h2>
+        <p style={{ color: T.muted, fontSize: 13 }}>
+          Almost every application asks these. Set them once and the engine
+          answers them for you; leave one unset and that question comes back
+          to you instead. (Consent questions and &quot;have you interviewed
+          here before&quot; always come back to you.)
+        </p>
+        <span style={label}>Open to relocation?</span>
+        <select style={input} value={relocation} onChange={e => setRelocation(e.target.value)}>
+          <option value="">Not set — ask me each time</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+        <span style={label}>Willing to work in-person / hybrid (some days in an office)?</span>
+        <select style={input} value={onsite} onChange={e => setOnsite(e.target.value)}>
+          <option value="">Not set — ask me each time</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
       </section>
 
       <section style={box}>

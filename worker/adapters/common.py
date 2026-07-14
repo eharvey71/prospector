@@ -43,22 +43,35 @@ def option_matches(answer: str, option_text: str) -> bool:
     return a_yes == t_yes and a_no == t_no
 
 
-def decide_standard_answer(label: str, location: str, work_auth: str) -> str | None:
+def decide_standard_answer(label: str, location: str, work_auth: str,
+                           screeners: dict | None = None) -> str | None:
     """Answer the ATS-standard screening questions from profile facts, or
     None for anything that requires judgment (self-assessments, legal
-    restrictions, prior employment)."""
+    restrictions, prior employment).
+
+    screeners: the profile's ScreenerFacts dict (open_to_relocation,
+    onsite_ok). A missing/None fact means "not stated" -> escalate."""
     q = label.lower()
     loc = location.lower()
     auth = work_auth.lower()
+    s = screeners or {}
     in_us = any(h in loc for h in US_LOCATION_HINTS)
     us_authorized = any(h in auth for h in US_CITIZEN_HINTS)
 
+    def yes_no(fact):
+        return None if fact is None else ("Yes" if fact else "No")
+
     if re.search(r"country of residence|country.*(located|reside)|where are you.*based|currently based", q):
         return "United States" if in_us else None
-    if re.search(r"require.*sponsorship|sponsorship.*visa|visa.*sponsor", q):
+    if re.search(r"require.*sponsorship|sponsorship.*visa|visa.*sponsor|require.*employment visa", q):
         return "No" if us_authorized else None
     if re.search(r"authorized to work|legally.*work", q):
         return "Yes" if us_authorized else None
+    if re.search(r"\brelocat", q):
+        return yes_no(s.get("open_to_relocation"))
+    if re.search(r"\bin[\s-]?person\b|\bin[\s-]?office\b|\bon[\s-]?site\b"
+                 r"|\bhybrid\b|work(ing)?\s(from|in)\s(an|the|one of our)\s?offices?", q):
+        return yes_no(s.get("onsite_ok"))
     return None
 
 

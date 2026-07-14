@@ -118,6 +118,54 @@ export function MatchInsight({ app, threshold, queue }) {
   );
 }
 
+// The adapter's fill sheet: every answer it used (to copy into the form —
+// the engine's browser session is gone, so nothing persists on the ATS
+// side) plus the fields it couldn't answer.
+function FillSheet({ sheet }) {
+  if (!sheet || sheet.length === 0) return null;
+  const needs = sheet.filter((e) => e.status !== "filled");
+  const filled = sheet.filter((e) => e.status === "filled");
+  return (
+    <div style={{ margin: "10px 0" }}>
+      {needs.length > 0 && (
+        <div style={{
+          background: T.panelAlt, borderLeft: `3px solid ${T.warn}`,
+          borderRadius: 6, padding: "10px 12px", marginBottom: 8,
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: T.warn, marginBottom: 4 }}>
+            Only you can answer these ({needs.length})
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>
+            {needs.map((e, i) => <li key={i}>{e.field}</li>)}
+          </ul>
+        </div>
+      )}
+      {filled.length > 0 && (
+        <details style={{
+          background: T.panelAlt, borderRadius: 6, padding: "10px 12px",
+        }}>
+          <summary style={{ cursor: "pointer", fontSize: 13, fontWeight: 600, color: T.ok }}>
+            Answers for everything else ({filled.length}) — copy into the form
+          </summary>
+          <table style={{ marginTop: 8, fontSize: 14, borderSpacing: 0 }}>
+            <tbody>
+              {filled.map((e, i) => (
+                <tr key={i}>
+                  <td style={{ color: T.muted, paddingRight: 14, paddingBottom: 4,
+                               verticalAlign: "top", whiteSpace: "nowrap" }}>
+                    {e.field}
+                  </td>
+                  <td style={{ paddingBottom: 4 }}>{e.value}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </details>
+      )}
+    </div>
+  );
+}
+
 // Storage paths -> clickable links that open the screenshot in a new tab.
 // storage.rules already lets the signed-in owner read users/{uid}/**.
 function ScreenshotLinks({ paths }) {
@@ -407,6 +455,7 @@ export default function ReviewQueue() {
                   Open the job posting ↗
                 </a>
               )}
+              <FillSheet sheet={a.submission?.fill_sheet} />
               <ScreenshotLinks paths={a.submission?.screenshots} />
               <details style={{ margin: "8px 0" }}>
                 <summary style={{ cursor: "pointer" }}>Cover letter (copy-paste ready)</summary>

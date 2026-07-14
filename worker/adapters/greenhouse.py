@@ -18,6 +18,7 @@ answer deterministically -> escalate with a screenshot, never improvise.
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 from playwright.async_api import async_playwright
@@ -47,6 +48,14 @@ class GreenhouseAdapter(SubmissionAdapter):
         location = (profile.get("location") or prof.get("location") or "")
         work_auth = (profile.get("work_auth") or prof.get("work_auth")
                      or answers.get("work_auth") or "")
+        screeners = profile.get("screeners") or prof.get("screeners") or {}
+
+        # Everything filled or left open, reported back on escalation so the
+        # human finishes the form from a checklist.
+        sheet: list[dict] = []
+
+        def note(field_label: str, value, status: str = "filled") -> None:
+            sheet.append({"field": field_label, "value": value, "status": status})
 
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
@@ -69,34 +78,48 @@ class GreenhouseAdapter(SubmissionAdapter):
 
                 # --- core fields ---
                 first, _, last = name.partition(" ")
-                await self._fill(page, "#first_name", first)
-                await self._fill(page, "#last_name", last)
-                await self._fill(page, "#email", profile.get("email") or prof.get("email", ""))
-                await self._fill(page, "#phone", prof.get("phone", ""))
+                email = profile.get("email") or prof.get("email", "")
+                phone = prof.get("phone", "")
+                if await self._fill(page, "#first_name", first):
+                    note("First name", first)
+                if await self._fill(page, "#last_name", last):
+                    note("Last name", last)
+                if await self._fill(page, "#email", email):
+                    note("Email", email)
+                if await self._fill(page, "#phone", phone):
+                    note("Phone", phone)
 
                 # --- resume: direct input, else Attach button/file chooser ---
                 resume_path = await fetch_resume(uid, name)
                 if resume_path:
-                    await self._attach_file(page, resume_path, section_hint="resume")
+                    if await self._attach_file(page, resume_path, section_hint="resume"):
+                        note("Resume", os.path.basename(resume_path))
 
                 # --- cover letter: textarea, else Enter-manually reveal ---
                 if letter:
-                    await self._enter_cover_letter(page, letter)
+                    if await self._enter_cover_letter(page, letter):
+                        note("Cover letter", "entered (full text on this card)")
 
                 # --- deterministic dropdown answering ---
                 answered, unanswerable = await self._handle_dropdowns(
                     page, location=location, work_auth=work_auth,
+                    screeners=screeners,
                 )
-                log.info("dropdowns answered=%s unanswerable=%s", answered, unanswerable)
+                for lbl, ans in answered:
+                    note(lbl, ans)
+                log.info("dropdowns answered=%s unanswerable=%s",
+                         [l for l, _ in answered], unanswerable)
 
                 # --- required fields still empty -> escalate ---
                 unmapped = await self._unmapped_required(page)
                 if unmapped or unanswerable:
                     remaining = unanswerable + [u for u in unmapped if u not in unanswerable]
+                    for u in remaining:
+                        note(u, None, "needs_you")
                     shots.append(await take_screenshot(page, uid, app_id, "unmapped"))
                     return SubmissionOutcome(
                         success=False, tier=self.tier, escalate=True,
-                        screenshots=shots,
+                        screenshots=shots, fill_sheet=sheet,
                         reason="required fields need a human: "
                                + ", ".join(remaining[:8]),
                     )
@@ -107,7 +130,7 @@ class GreenhouseAdapter(SubmissionAdapter):
                     log.info("DRY RUN — not submitting %s", job_url)
                     return SubmissionOutcome(
                         success=False, tier=self.tier, escalate=True,
-                        screenshots=shots,
+                        screenshots=shots, fill_sheet=sheet,
                         reason="dry run: form fully filled, submission skipped "
                                "(set SUBMIT_DRY_RUN=false to go live)",
                     )
@@ -214,9 +237,10 @@ class GreenhouseAdapter(SubmissionAdapter):
     # unanswerable (by label, so the escalation reason is human-readable).
     # ------------------------------------------------------------------
 
-    async def _handle_dropdowns(self, page, *, location: str, work_auth: str
-                                ) -> tuple[list[str], list[str]]:
-        answered: list[str] = []
+    async def _handle_dropdowns(self, page, *, location: str, work_auth: str,
+                                screeners: dict | None = None,
+                                ) -> tuple[list[tuple[str, str]], list[str]]:
+        answered: list[tuple[str, str]] = []   # (label, answer given)
         unanswerable: list[str] = []
 
         combos = page.locator(
@@ -275,7 +299,7 @@ class GreenhouseAdapter(SubmissionAdapter):
                     " || el.closest('div')?.textContent.includes('*')"
                 )
 
-                answer = decide_standard_answer(label, location, work_auth)
+                answer = decide_standard_answer(label, location, work_auth, screeners)
                 if answer is None:
                     if required:
                         unanswerable.append(label.replace("*", "").strip()[:60])
@@ -284,7 +308,7 @@ class GreenhouseAdapter(SubmissionAdapter):
                 tag = await combo.evaluate("el => el.tagName.toLowerCase()")
                 if tag == "select":
                     await combo.select_option(label=re.compile(rf"^{re.escape(answer)}", re.I))
-                    answered.append(label.replace("*", "").strip()[:60])
+                    answered.append((label.replace("*", "").strip()[:60], answer))
                     continue
 
                 # Combobox widgets: select, then VERIFY, else revert+escalate.
@@ -328,30 +352,37 @@ class GreenhouseAdapter(SubmissionAdapter):
                 # renders the choice into a '[class*=single-value]' element
                 # inside the CONTROL container. Walk starts at the PARENT —
                 # the input's own class (select__input) would false-match.
+                # The re-render after the option click is ASYNC — a single
+                # immediate read races it and reverts good selections, so
+                # poll for up to ~2.5s before giving up.
                 verified = False
                 shown = ""
                 if picked:
-                    shown = (await combo.evaluate("""
-                        el => {
-                            let n = el.parentElement;
-                            let control = null;
-                            for (let d = 0; d < 6 && n; d++) {
-                                if (n.className && /control/.test(String(n.className))) {
-                                    control = n; break;
+                    for _ in range(8):
+                        shown = (await combo.evaluate("""
+                            el => {
+                                let n = el.parentElement;
+                                let control = null;
+                                for (let d = 0; d < 6 && n; d++) {
+                                    if (n.className && /control/.test(String(n.className))) {
+                                        control = n; break;
+                                    }
+                                    n = n.parentElement;
                                 }
-                                n = n.parentElement;
+                                const scope = control || el.closest('div')?.parentElement || el.parentElement;
+                                const sv = scope?.querySelector("[class*='single-value'], [class*='selected']");
+                                return (sv?.textContent || scope?.textContent || '').trim();
                             }
-                            const scope = control || el.closest('div')?.parentElement || el.parentElement;
-                            const sv = scope?.querySelector("[class*='single-value'], [class*='selected']");
-                            return (sv?.textContent || scope?.textContent || '').trim();
-                        }
-                    """)) or ""
-                    verified = answer.lower() in shown.lower()
+                        """)) or ""
+                        if answer.lower() in shown.lower():
+                            verified = True
+                            break
+                        await page.wait_for_timeout(300)
                 log.info("dropdown %r: answer=%r picked=%s shown=%r verified=%s",
                          label[:50], answer, picked, shown[:80], verified)
 
                 if picked and verified:
-                    answered.append(label.replace("*", "").strip()[:60])
+                    answered.append((label.replace("*", "").strip()[:60], answer))
                 else:
                     # Revert whatever state we left and hand it to the human.
                     await page.keyboard.press("Escape")
@@ -374,12 +405,14 @@ class GreenhouseAdapter(SubmissionAdapter):
 
     # ------------------------------------------------------------------
 
-    async def _fill(self, page, selector: str, value: str) -> None:
+    async def _fill(self, page, selector: str, value: str) -> bool:
         if not value:
-            return
+            return False
         loc = page.locator(selector).first
-        if await loc.count() > 0:
-            await loc.fill(value)
+        if await loc.count() == 0:
+            return False
+        await loc.fill(value)
+        return True
 
     async def _unmapped_required(self, page) -> list[str]:
         # Combobox inner inputs stay value-less even when an option is

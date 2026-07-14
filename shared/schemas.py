@@ -77,6 +77,15 @@ class WritingSample(BaseModel):
     text: str
 
 
+class ScreenerFacts(BaseModel):
+    """Deterministic answers for screening questions nearly every ATS asks.
+    None = not stated — the question escalates to the human instead of being
+    guessed. Judgment/consent questions (AI policy, 'have you interviewed
+    here before') are deliberately NOT represented here."""
+    open_to_relocation: Optional[bool] = None
+    onsite_ok: Optional[bool] = None    # in-person / hybrid / N%-in-office
+
+
 class Preferences(BaseModel):
     titles: list[str] = Field(default_factory=list)
     remote_only: bool = False
@@ -95,6 +104,7 @@ class UserProfile(BaseModel):
     skills: list[str] = Field(default_factory=list)
     work_history: list[WorkHistoryItem] = Field(default_factory=list)
     writing_samples: list[WritingSample] = Field(default_factory=list)
+    screeners: ScreenerFacts = Field(default_factory=ScreenerFacts)
     preferences: Preferences = Field(default_factory=Preferences)
 
 
@@ -206,6 +216,10 @@ class SubmissionRecord(BaseModel):
     tier: Optional[int] = None      # 1 deterministic, 2 agentic, 3 human
     attempts: int = 0
     screenshots: list[str] = Field(default_factory=list)  # Storage paths
+    # What the adapter filled (or prepared) before escalating, so the human
+    # can finish the form from a checklist instead of re-deriving answers:
+    # [{"field": label, "value": str|None, "status": "filled"|"needs_you"}]
+    fill_sheet: list[dict] = Field(default_factory=list)
     confirmed_at: Optional[datetime] = None
     error: Optional[str] = None
 

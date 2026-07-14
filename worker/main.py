@@ -21,7 +21,7 @@ from google.cloud import firestore
 
 from adapters import get_adapter
 from adapters.base import SubmissionOutcome
-from schemas import AppState, SubmitTask
+from schemas import AppState, AtsType, SubmitTask
 from state_machine import advance
 
 logging.basicConfig(level=logging.INFO)
@@ -110,7 +110,8 @@ async def submit(request: Request) -> dict:
         return {"status": "submitted"}
 
     if outcome.escalate or attempts >= MAX_ATTEMPTS:
-        _escalate(task, outcome.reason or "adapter escalated", attempts, outcome.screenshots)
+        _escalate(task, outcome.reason or "adapter escalated", attempts,
+                  outcome.screenshots, outcome.fill_sheet)
         return {"status": "needs_human"}
 
     _requeue(task, attempts, outcome.reason or "retryable failure")
@@ -118,13 +119,15 @@ async def submit(request: Request) -> dict:
 
 
 def _escalate(task: SubmitTask, reason: str, attempts: int = 0,
-              screenshots: list[str] | None = None) -> None:
+              screenshots: list[str] | None = None,
+              fill_sheet: list[dict] | None = None) -> None:
     assert db is not None
     advance(db, task.uid, task.app_id, AppState.SUBMITTING, AppState.NEEDS_HUMAN,
             note=reason,
             extra_fields={"submission": {
                 "tier": 3, "attempts": attempts,
                 "screenshots": screenshots or [], "error": reason,
+                "fill_sheet": fill_sheet or [],
             }})
 
 
