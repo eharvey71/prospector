@@ -8,7 +8,8 @@ import {
   serverTimestamp, updateDoc, where, arrayUnion,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
-import { auth, db, functions, googleProvider } from "../lib/firebase";
+import { ref as storageRef, getDownloadURL } from "firebase/storage";
+import { auth, db, functions, googleProvider, storage } from "../lib/firebase";
 import { T, Nav, card, btn, btnPrimary } from "./ui";
 
 const ANSWER_LABELS = {
@@ -117,6 +118,37 @@ export function MatchInsight({ app, threshold, queue }) {
   );
 }
 
+// Storage paths -> clickable links that open the screenshot in a new tab.
+// storage.rules already lets the signed-in owner read users/{uid}/**.
+function ScreenshotLinks({ paths }) {
+  const [urls, setUrls] = useState({});
+  useEffect(() => {
+    (paths || []).forEach(async (p) => {
+      try {
+        const u = await getDownloadURL(storageRef(storage, p));
+        setUrls((prev) => (prev[p] ? prev : { ...prev, [p]: u }));
+      } catch { /* not readable — leave it as plain text */ }
+    });
+  }, [paths]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!paths || paths.length === 0) return null;
+  return (
+    <div style={{ fontSize: 13, marginTop: 8 }}>
+      <span style={{ color: T.muted }}>Screenshots: </span>
+      {paths.map((p) => {
+        const name = p.split("/").pop().replace(/\.png$/, "");
+        return urls[p] ? (
+          <a key={p} href={urls[p]} target="_blank" rel="noreferrer"
+             style={{ color: T.accent, marginRight: 12 }}>
+            {name} ↗
+          </a>
+        ) : (
+          <span key={p} style={{ color: T.muted, marginRight: 12 }}>{name}</span>
+        );
+      })}
+    </div>
+  );
+}
+
 function ScreeningAnswers({ answers }) {
   const entries = [
     ...Object.entries(answers || {}).filter(([k, v]) => k !== "extra" && v),
@@ -192,14 +224,26 @@ export default function ReviewQueue() {
       const snap = await getDoc(doc(db, "jobPostings", m.posting_id));
       if (snap.exists()) {
         const p = snap.data();
-        setPostings(prev => ({ ...prev, [m.posting_id]: { title: p.title, company: p.company } }));
+        setPostings(prev => ({
+          ...prev,
+          [m.posting_id]: { title: p.title, company: p.company, url: p.url },
+        }));
       }
     });
   }, [matches, apps, escalated, inflight, done]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const jobLine = (a) => postings[a.posting_id]
-    ? `${postings[a.posting_id].title} @ ${postings[a.posting_id].company}`
-    : "…";
+  // Title @ company, linking to the original posting in a new tab.
+  const jobLine = (a) => {
+    const p = postings[a.posting_id];
+    if (!p) return "…";
+    const line = `${p.title} @ ${p.company}`;
+    return p.url ? (
+      <a href={p.url} target="_blank" rel="noreferrer"
+         style={{ color: "inherit", textDecoration: "none" }}>
+        {line} <span style={{ color: T.accent, fontSize: "0.8em" }}>↗</span>
+      </a>
+    ) : line;
+  };
 
   async function addJob() {
     if (!jobUrl.trim()) return;
@@ -356,12 +400,15 @@ export default function ReviewQueue() {
             <article key={a.id} style={{ ...card, borderColor: T.warn }}>
               <h2 style={{ margin: "0 0 4px" }}>{jobLine(a)}</h2>
               <p><strong style={{ color: T.warn }}>Why:</strong> {a.submission?.error || "escalated"}</p>
-              {(a.submission?.screenshots || []).length > 0 && (
-                <p style={{ fontSize: 13, color: T.muted }}>
-                  Screenshots in Storage: {(a.submission.screenshots || []).join(", ")}
-                </p>
+              {postings[a.posting_id]?.url && (
+                <a href={postings[a.posting_id].url} target="_blank" rel="noreferrer"
+                   style={{ ...btnPrimary, display: "inline-block",
+                            textDecoration: "none", marginBottom: 12 }}>
+                  Open the job posting ↗
+                </a>
               )}
-              <details style={{ marginBottom: 8 }}>
+              <ScreenshotLinks paths={a.submission?.screenshots} />
+              <details style={{ margin: "8px 0" }}>
                 <summary style={{ cursor: "pointer" }}>Cover letter (copy-paste ready)</summary>
                 <pre style={{ whiteSpace: "pre-wrap", background: T.panelAlt, padding: 12, borderRadius: 6 }}>
                   {a.letter?.text}
@@ -447,11 +494,7 @@ export default function ReviewQueue() {
               ) : (
                 <span style={{ color: T.danger }}>✗ failed — {a.submission?.error || "see logs"}</span>
               )}
-              {(a.submission?.screenshots || []).length > 0 && (
-                <div style={{ fontSize: 12, color: T.muted, marginTop: 4 }}>
-                  Screenshots: {(a.submission.screenshots || []).join(", ")}
-                </div>
-              )}
+              <ScreenshotLinks paths={a.submission?.screenshots} />
             </article>
           ))}
         </>
