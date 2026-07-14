@@ -39,6 +39,106 @@ const ANSWER_LABELS = {
   work_auth: "Work authorization",
 };
 
+// --- match insight card ------------------------------------------------
+// One block that answers, in order: how good is this fit, why is it in this
+// queue, why does it match, what's wrong with it, and what to do next.
+
+const tierOf = (score, threshold) =>
+  score >= 85 ? { label: "Strong match", color: T.ok }
+  : score >= threshold ? { label: "Good match", color: T.accent }
+  : { label: "Stretch", color: T.warn };
+
+// Older applications stored red flags as plain strings.
+const normFlag = (f) =>
+  typeof f === "string" ? { severity: "concern", topic: "", detail: f } : f;
+
+const sectionLabel = (color) => ({
+  fontSize: 13, fontWeight: 600, color, marginTop: 10,
+});
+
+function FlagList({ flags, color }) {
+  return (
+    <ul style={{ margin: "4px 0 0" }}>
+      {flags.map((f, i) => (
+        <li key={i} style={{ marginBottom: 2 }}>
+          {f.topic ? <strong style={{ color }}>{f.topic} — </strong> : null}
+          {f.detail}
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+export function MatchInsight({ app, threshold, queue }) {
+  const m = app.match || {};
+  const score = m.score ?? 0;
+  const tier = tierOf(score, threshold);
+  const flags = (m.red_flags || []).map(normFlag);
+  const blockers = flags.filter((f) => f.severity === "blocker");
+  const concerns = flags.filter((f) => f.severity !== "blocker");
+
+  const whyHere = app.user_added
+    ? score < threshold
+      ? `Below your ${threshold}-point bar — showing only because you added it yourself.`
+      : "You added this job yourself."
+    : `Cleared your ${threshold}-point bar${queue === "matched" ? "; auto-draft is off, so it waits for your go-ahead" : ""}.`;
+
+  const nextStep = queue === "review"
+    ? "Read and edit the letter below — edits save when you click away. Approve to submit it, Reject to drop it."
+    : blockers.length > 0
+      ? "A cover letter can't fix a blocker — Skip unless the flag is wrong."
+      : tier.label === "Stretch"
+        ? "Long shot — spend a letter here only if you'd take it over a stronger match."
+        : "Good odds — write the letter next; nothing is sent until you approve it.";
+
+  return (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", marginTop: 6 }}>
+        <span style={{
+          padding: "2px 10px", borderRadius: 999, fontSize: 13, fontWeight: 600,
+          border: `1px solid ${tier.color}`, color: tier.color,
+        }}>
+          {score} · {tier.label}
+        </span>
+        <span style={{ color: T.muted, fontSize: 13 }}>{whyHere}</span>
+      </div>
+
+      {m.summary && (
+        <p style={{ margin: "10px 0 0", fontStyle: "italic" }}>{m.summary}</p>
+      )}
+
+      {(m.reasons || []).length > 0 && (
+        <>
+          <div style={sectionLabel(T.ok)}>Why you match</div>
+          <ul style={{ margin: "4px 0 0" }}>
+            {(m.reasons || []).map((r, i) => <li key={i} style={{ marginBottom: 2 }}>{r}</li>)}
+          </ul>
+        </>
+      )}
+
+      {blockers.length > 0 && (
+        <>
+          <div style={sectionLabel(T.danger)}>
+            Blockers — hard requirements you don&apos;t meet
+          </div>
+          <FlagList flags={blockers} color={T.danger} />
+        </>
+      )}
+
+      {concerns.length > 0 && (
+        <details style={{ marginTop: 10 }}>
+          <summary style={{ ...sectionLabel(T.warn), marginTop: 0, cursor: "pointer" }}>
+            {concerns.length} concern{concerns.length > 1 ? "s" : ""} — weaker points a letter could address
+          </summary>
+          <FlagList flags={concerns} color={T.warn} />
+        </details>
+      )}
+
+      <p style={{ color: T.muted, fontSize: 13, margin: "12px 0 8px" }}>{nextStep}</p>
+    </div>
+  );
+}
+
 function ScreeningAnswers({ answers }) {
   const entries = [
     ...Object.entries(answers || {}).filter(([k, v]) => k !== "extra" && v),
@@ -66,8 +166,17 @@ export default function ReviewQueue() {
   const [done, setDone] = useState([]);             // submitted/failed
   const [postings, setPostings] = useState({});     // posting_id -> {title, company}
   const [draftingIds, setDraftingIds] = useState([]);
+  const [threshold, setThreshold] = useState(70);   // preferences.min_match_score
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
+
+  useEffect(() => {
+    if (!user) return;
+    getDoc(doc(db, "users", user.uid)).then((s) => {
+      const t = s.data()?.preferences?.min_match_score;
+      if (typeof t === "number") setThreshold(t);
+    });
+  }, [user]);
 
   useEffect(() => {
     if (!user) return;
@@ -191,20 +300,12 @@ export default function ReviewQueue() {
         <>
           <h1>Matches awaiting a letter ({matches.length})</h1>
           <p style={{ color: T.muted }}>
-            Auto-draft is off — pick which of these get a cover letter written.
+            Pick which of these get a cover letter written. Best score first.
           </p>
           {matches.map((m) => (
             <article key={m.id} style={{ ...card, padding: 14 }}>
-              <strong>{jobLine(m)}</strong>{" "}
-              <span style={{ color: T.muted }}>score {m.match?.score}</span>
-              <ul style={{ margin: "8px 0" }}>
-                {(m.match?.reasons || []).slice(0, 3).map((r, i) => <li key={i}>{r}</li>)}
-              </ul>
-              {(m.match?.red_flags || []).length > 0 && (
-                <p style={{ color: T.danger, fontSize: 13 }}>
-                  Red flags: {(m.match.red_flags || []).join("; ")}
-                </p>
-              )}
+              <strong>{jobLine(m)}</strong>
+              <MatchInsight app={m} threshold={threshold} queue="matched" />
               <button
                 style={btnPrimary}
                 disabled={draftingIds.includes(m.id)}
@@ -226,13 +327,7 @@ export default function ReviewQueue() {
         <article key={a.id} style={card}>
           <header>
             <h2 style={{ margin: "0 0 4px" }}>{jobLine(a)}</h2>
-            <strong>Match score: {a.match?.score}</strong>
-            <ul>{(a.match?.reasons || []).map((r, i) => <li key={i}>{r}</li>)}</ul>
-            {(a.match?.red_flags || []).length > 0 && (
-              <p style={{ color: T.danger }}>
-                Red flags: {(a.match.red_flags || []).join("; ")}
-              </p>
-            )}
+            <MatchInsight app={a} threshold={threshold} queue="review" />
           </header>
           <textarea
             defaultValue={a.letter?.text || ""}

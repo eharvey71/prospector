@@ -19,9 +19,14 @@ log = logging.getLogger("matching")
 
 MATCH_SYSTEM = """You are a rigorous recruiting analyst. Score how well a \
 candidate fits a job posting on 0-100. Be conservative: 85+ means the \
-candidate could credibly be a top-3 applicant. List concrete reasons tied to \
-the candidate's actual history, and red flags (seniority mismatch, missing \
-hard requirements, location conflicts). Never invent experience."""
+candidate could credibly be a top-3 applicant. Never invent experience.
+
+Write for a candidate deciding in ten seconds whether to apply. summary is \
+your out-loud verdict in one sentence. reasons tie the candidate's actual \
+history to the job's stated needs, one short sentence each. red_flags are \
+capped at five, most serious first, one gap per flag stated once — severity \
+"blocker" is reserved for a hard requirement in the posting the candidate \
+clearly fails; everything else is a "concern"."""
 
 
 def match_posting_for_user(

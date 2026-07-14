@@ -9,9 +9,9 @@ from __future__ import annotations
 import hashlib
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Optional
+from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
 # ---------------------------------------------------------------------------
@@ -126,10 +126,66 @@ class JobPosting(BaseModel):
 # Applications
 # ---------------------------------------------------------------------------
 
+class RedFlag(BaseModel):
+    """One structured concern from matching. Field descriptions double as
+    LLM instructions — generate_structured() embeds this schema in the
+    system prompt."""
+    severity: Literal["blocker", "concern"] = Field(
+        default="concern",
+        description=(
+            "'blocker' ONLY for a hard requirement stated in the posting that "
+            "the candidate clearly fails (location, clearance, license, "
+            "explicit years in a named domain). Everything else is 'concern'."
+        ),
+    )
+    topic: str = Field(
+        default="",
+        description="2-4 word label, e.g. 'Location' or 'No shipped LLM work'.",
+    )
+    detail: str = Field(
+        description="One short sentence explaining the flag. No compound lists.",
+    )
+
+
 class MatchResult(BaseModel):
     score: int = Field(ge=0, le=100)
-    reasons: list[str] = Field(default_factory=list)
-    red_flags: list[str] = Field(default_factory=list)
+    summary: str = Field(
+        default="",
+        description=(
+            "One plain-English sentence: the verdict you would say out loud "
+            "to the candidate about this fit."
+        ),
+    )
+    reasons: list[str] = Field(
+        default_factory=list,
+        max_length=5,
+        description=(
+            "3-5 items, each ONE short sentence tying the candidate's actual "
+            "history to a stated need of the job."
+        ),
+    )
+    red_flags: list[RedFlag] = Field(
+        default_factory=list,
+        max_length=5,
+        description=(
+            "At most 5, most serious first. Do not restate the same gap in "
+            "different words."
+        ),
+    )
+
+    @field_validator("red_flags", mode="before")
+    @classmethod
+    def _coerce_legacy_flags(cls, v: object) -> object:
+        """Pre-2026-07 documents stored red_flags as plain strings. Also
+        truncate instead of failing when the model ignores the cap."""
+        if isinstance(v, list):
+            return [{"detail": f} if isinstance(f, str) else f for f in v][:5]
+        return v
+
+    @field_validator("reasons", mode="before")
+    @classmethod
+    def _cap_reasons(cls, v: object) -> object:
+        return v[:5] if isinstance(v, list) else v
 
 
 class Letter(BaseModel):
