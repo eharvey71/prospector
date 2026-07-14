@@ -18,6 +18,7 @@ The escalation contract is unchanged from Tier 1, enforced structurally:
 from __future__ import annotations
 
 import logging
+import os
 import re
 
 from playwright.async_api import async_playwright
@@ -79,12 +80,21 @@ INVENTORY_JS = """
         el.offsetParent !== null && el.type !== 'hidden'
         && el.type !== 'submit' && el.type !== 'button');
     for (const el of controls) {
+        // Custom dropdown widgets (react-select and friends): the inner
+        // <input> is NOT a text field — typing into it selects nothing,
+        // yet reads back as "filled". Classify it separately so it is
+        // never plan-filled; required ones escalate honestly.
+        const isCombo = el.tagName === 'INPUT' && (
+            el.getAttribute('role') === 'combobox'
+            || el.hasAttribute('aria-autocomplete')
+            || !!el.closest("[role='combobox'],[class*='select']"));
         const kind =
             el.tagName === 'SELECT' ? 'select' :
             el.tagName === 'TEXTAREA' ? 'textarea' :
             el.type === 'file' ? 'file' :
             el.type === 'radio' ? 'radio' :
-            el.type === 'checkbox' ? 'checkbox' : 'text';
+            el.type === 'checkbox' ? 'checkbox' :
+            isCombo ? 'combobox' : 'text';
         // Radios: one entry per GROUP, options from each input's label/value.
         if (kind === 'radio') {
             if (seen.has('radio:' + el.name)) continue;
@@ -189,30 +199,39 @@ class AgenticAdapter(SubmissionAdapter):
                         if resume_path:
                             await page.locator(
                                 f"[data-je-id='{c['id']}']").set_input_files(resume_path)
-                            filled.append(c["id"])
+                            filled.append((c["id"], os.path.basename(resume_path)))
                         elif c["required"]:
                             failed.append((c["id"], "resume required, none on file"))
 
-                # Anything required and not verified-filled escalates.
-                cannot = set(plan.cannot_answer) | {i for i, _ in failed}
+                # ANY required control not verified-filled escalates — whether
+                # the LLM declared it unanswerable, a fill failed, or it was
+                # never plannable at all (combobox widgets, checkboxes). The
+                # old cannot_answer-based check missed that last group.
                 by_id = {c["id"]: c for c in inventory}
+                filled_ids = {i for i, _ in filled}
                 blockers = [
-                    by_id[i]["label"][:60] or f"control {i}"
-                    for i in sorted(cannot)
-                    if i in by_id and by_id[i]["required"] and i not in filled
+                    c["label"][:60] or f"control {c['id']}"
+                    for c in inventory
+                    if c["required"] and c["id"] not in filled_ids
                 ]
                 captcha = await page.locator(CAPTCHA_SELECTOR).count() > 0
                 if captcha:
                     blockers.append("captcha on page")
 
+                # Fill sheet: what was used, and what only the human can do.
+                sheet = [{"field": by_id[i]["label"][:60] or f"control {i}",
+                          "value": v, "status": "filled"} for i, v in filled]
+                sheet += [{"field": b, "value": None, "status": "needs_you"}
+                          for b in blockers]
+
                 log.info("tier2 filled=%s failed=%s blockers=%s",
-                         filled, failed, blockers)
+                         sorted(filled_ids), failed, blockers)
 
                 if blockers:
                     shots.append(await take_screenshot(page, uid, app_id, "unmapped"))
                     return SubmissionOutcome(
                         success=False, tier=self.tier, escalate=True,
-                        screenshots=shots,
+                        screenshots=shots, fill_sheet=sheet,
                         reason="needs a human: " + ", ".join(blockers[:8]),
                     )
 
@@ -222,7 +241,7 @@ class AgenticAdapter(SubmissionAdapter):
                     log.info("DRY RUN — not submitting %s", job_url)
                     return SubmissionOutcome(
                         success=False, tier=self.tier, escalate=True,
-                        screenshots=shots,
+                        screenshots=shots, fill_sheet=sheet,
                         reason="dry run: form fully filled, submission skipped "
                                "(set SUBMIT_DRY_RUN=false to go live)",
                     )
@@ -251,6 +270,9 @@ class AgenticAdapter(SubmissionAdapter):
 
         prof = profile.get("profile", profile)
         answers = application.get("screeningAnswers") or {}
+        screeners = profile.get("screeners") or prof.get("screeners") or {}
+        tri = lambda v: ("not stated — put such questions in cannot_answer"  # noqa: E731
+                         if v is None else ("Yes" if v else "No"))
         history = "\n".join(
             f"- {w.get('title')} at {w.get('company')} "
             f"({w.get('start')} to {w.get('end') or 'present'})"
@@ -263,6 +285,8 @@ Phone: {prof.get('phone') or ''}
 Location: {profile.get('location') or prof.get('location') or ''}
 Work authorization: {profile.get('work_auth') or prof.get('work_auth') or ''}
 Salary target: {profile.get('salary_target') or prof.get('salary_target') or ''}
+Open to relocation: {tri(screeners.get('open_to_relocation'))}
+Willing to work in-person/onsite/hybrid: {tri(screeners.get('onsite_ok'))}
 Work history:
 {history}
 
@@ -274,11 +298,16 @@ Work authorization: {answers.get('work_auth') or ''}
 COVER LETTER (use verbatim for cover_letter controls):
 {letter[:3000]}"""
 
+        # Comboboxes can't be filled by the plan (typing into the inner input
+        # selects nothing); checkboxes are never answered; files are handled
+        # separately. Leaving them out of the listing keeps the LLM from
+        # planning fills that _execute would reject anyway.
         controls = "\n".join(
             f"[{c['id']}] kind={c['kind']} required={c['required']} "
             f"label={c['label']!r}"
             + (f" options={c['options']}" if c.get("options") else "")
             for c in inventory
+            if c["kind"] not in ("combobox", "checkbox", "file")
         )
         return generate_structured(
             f"{facts}\n\nFORM CONTROLS:\n{controls}\n\nProduce the plan.",
@@ -288,10 +317,11 @@ COVER LETTER (use verbatim for cover_letter controls):
         )
 
     async def _execute(self, page, inventory: list[dict], plan: FormPlan,
-                       letter: str) -> tuple[list[int], list[tuple[int, str]]]:
-        """Perform the plan's fills deterministically; verify every one."""
+                       letter: str) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+        """Perform the plan's fills deterministically; verify every one.
+        Returns (filled as (id, value used), failed as (id, reason))."""
         by_id = {c["id"]: c for c in inventory}
-        filled: list[int] = []
+        filled: list[tuple[int, str]] = []
         failed: list[tuple[int, str]] = []
 
         for f in plan.fills:
@@ -300,10 +330,13 @@ COVER LETTER (use verbatim for cover_letter controls):
                 continue
             loc = page.locator(f"[data-je-id='{c['id']}']")
             try:
+                shown_value = f.value
                 if c["kind"] in ("text", "textarea", "cover_letter"):
                     value = letter if c["kind"] == "cover_letter" else f.value
                     await loc.first.fill(value)
                     ok = (await loc.first.input_value()) == value
+                    if c["kind"] == "cover_letter":
+                        shown_value = "entered (full text on this card)"
                 elif c["kind"] == "select":
                     if f.value not in (c.get("options") or []):
                         failed.append((c["id"], "value not among options"))
@@ -327,8 +360,10 @@ COVER LETTER (use verbatim for cover_letter controls):
                 log.info("fill [%d] %r = %r (%s) verified=%s",
                          c["id"], c["label"][:40], f.value[:60],
                          f.justification[:80], ok)
-                (filled if ok else failed).append(
-                    c["id"] if ok else (c["id"], "verification failed"))
+                if ok:
+                    filled.append((c["id"], shown_value))
+                else:
+                    failed.append((c["id"], "verification failed"))
             except Exception as exc:
                 log.warning("fill [%d] failed: %s", c["id"], exc)
                 failed.append((c["id"], str(exc)[:80]))
