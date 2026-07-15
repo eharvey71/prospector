@@ -54,8 +54,11 @@
       && !["hidden", "submit", "button", "file", "radio", "checkbox"].includes(el.type)
       && !el.value);
 
+  const fieldKey = (s) => norm((s || "").replace(/\(.*?\)/g, ""));
+
   function fillAll() {
     let count = 0;
+    const filledKeys = new Set();
     const values = [...(pending.values || [])];
     if (pending.letter) values.push({ field: "cover letter", value: pending.letter });
     // Suggested answers for the open questions are attempted too — the
@@ -79,7 +82,7 @@
       if (!value || /entered \(full text/.test(value) || field === "Resume") continue;
       // "(could not verify selection)" and similar annotations from the
       // worker would break label matching — strip parentheticals.
-      const f = norm((field || "").replace(/\(.*?\)/g, ""));
+      const f = fieldKey(field);
       let el = null;
       for (const [key, sel] of Object.entries(direct)) {
         if (f.includes(key)) { el = document.querySelector(sel); break; }
@@ -90,7 +93,9 @@
           return l && f && (l.includes(f) || f.includes(l)) && l.length > 3;
         }) || null;
       }
-      if (el && !el.value) { setValue(el, value); count++; continue; }
+      if (el && !el.value) {
+        setValue(el, value); count++; filledKeys.add(f); continue;
+      }
 
       // Native selects: match by option text.
       for (const sel of document.querySelectorAll("select")) {
@@ -103,12 +108,12 @@
         if (opt) {
           sel.value = opt.value;
           sel.dispatchEvent(new Event("change", { bubbles: true }));
-          count++;
+          count++; filledKeys.add(f);
         }
         break;
       }
     }
-    return count;
+    return { count, filledKeys };
   }
 
   // --- panel ---
@@ -120,12 +125,15 @@
     border:1px solid ${P.border};border-radius:10px;padding:14px;
     font:13px/1.45 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.5)`;
 
+  const rowRegistry = [];   // fieldKey -> row nodes, for post-fill ✓ marks
+
   const row = (label, value) => {
     const div = document.createElement("div");
     div.style.cssText = `margin:6px 0;padding:6px 8px;background:${P.alt};border-radius:6px`;
     const name = document.createElement("div");
     name.textContent = label;
     name.style.cssText = `color:${P.muted};font-size:11px`;
+    rowRegistry.push({ key: fieldKey(label), div, name });
     const val = document.createElement("div");
     val.textContent = value.length > 90 ? value.slice(0, 90) + "…" : value;
     const copy = document.createElement("button");
@@ -168,22 +176,39 @@
   const status = document.createElement("div");
   status.style.cssText = `color:${P.muted};margin-bottom:8px`;
   fillBtn.onclick = () => {
-    const n = fillAll();
-    status.textContent = `Filled ${n} field${n === 1 ? "" : "s"} — review everything, `
-      + `attach your resume by hand, then click the page's own Submit.`;
+    const { count, filledKeys } = fillAll();
+    status.textContent = `Filled ${count} field${count === 1 ? "" : "s"} — checked rows `
+      + `below went in. Review everything, attach your resume by hand, then `
+      + `click the page's own Submit.`;
+    for (const r of rowRegistry) {
+      if (filledKeys.has(r.key) && !r.name.textContent.startsWith("✓")) {
+        r.name.textContent = "✓ " + r.name.textContent;
+        r.div.style.opacity = "0.55";
+      }
+    }
   };
 
   panel.append(close, h, sub, fillBtn, status);
 
   const needs = pending.needs || [];
-  if (needs.length) {
+  const known = needs.filter((e) => e.suggestion);
+  const yours = needs.filter((e) => !e.suggestion);
+  if (known.length) {
     const t = document.createElement("div");
-    t.textContent = `Only you can answer (${needs.length}):`;
+    t.textContent = `Known answers — Fill will try these (${known.length}):`;
+    t.style.cssText = `color:${P.accent};font-weight:600;margin-top:8px`;
+    panel.append(t);
+    for (const e of known) {
+      panel.append(row(e.field.replace(/\s*\(could not verify selection\)/, ""),
+                       e.suggestion));
+    }
+  }
+  if (yours.length) {
+    const t = document.createElement("div");
+    t.textContent = `Only you can answer (${yours.length}):`;
     t.style.cssText = `color:${P.warn};font-weight:600;margin-top:8px`;
     panel.append(t);
-    for (const e of needs) {
-      panel.append(row(e.field, e.suggestion || "(no suggestion — your call)"));
-    }
+    for (const e of yours) panel.append(row(e.field, "(your call)"));
   }
   const values = pending.values || [];
   if (values.length || pending.letter) {

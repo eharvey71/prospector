@@ -124,29 +124,40 @@ export function MatchInsight({ app, threshold, queue }) {
 function FillSheet({ sheet }) {
   if (!sheet || sheet.length === 0) return null;
   const needs = sheet.filter((e) => e.status !== "filled");
+  const known = needs.filter((e) => e.suggestion);   // engine knows the answer,
+                                                     // just couldn't click it
+  const yours = needs.filter((e) => !e.suggestion);  // genuinely human calls
   const filled = sheet.filter((e) => e.status === "filled");
   return (
     <div style={{ margin: "10px 0" }}>
-      {needs.length > 0 && (
+      {known.length > 0 && (
+        <div style={{
+          background: T.panelAlt, borderLeft: `3px solid ${T.accent}`,
+          borderRadius: 6, padding: "10px 12px", marginBottom: 8,
+        }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: T.accent, marginBottom: 4 }}>
+            Known answers the robot couldn&apos;t click ({known.length}) — autofill will try them
+          </div>
+          <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>
+            {known.map((e, i) => (
+              <li key={i} style={{ marginBottom: 4 }}>
+                {e.field.replace(/\s*\(could not verify selection\)/, "")}
+                {": "}<span style={{ color: T.muted }}>{e.suggestion}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {yours.length > 0 && (
         <div style={{
           background: T.panelAlt, borderLeft: `3px solid ${T.warn}`,
           borderRadius: 6, padding: "10px 12px", marginBottom: 8,
         }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: T.warn, marginBottom: 4 }}>
-            Only you can answer these ({needs.length})
+            Only you can answer these ({yours.length})
           </div>
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>
-            {needs.map((e, i) => (
-              <li key={i} style={{ marginBottom: 6 }}>
-                {e.field}
-                {e.suggestion && (
-                  <div style={{ fontSize: 13, marginTop: 2 }}>
-                    <span style={{ color: T.accent }}>suggested: </span>
-                    <span style={{ color: T.muted }}>{e.suggestion}</span>
-                  </div>
-                )}
-              </li>
-            ))}
+            {yours.map((e, i) => <li key={i} style={{ marginBottom: 4 }}>{e.field}</li>)}
           </ul>
         </div>
       )}
