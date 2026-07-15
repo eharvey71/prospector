@@ -132,6 +132,16 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
         critique_notes=critique.notes + critique.unsupported_claims,
     )
 
+    # --- tailored resume (optional; falls back to the uploaded static) ---
+    resume_path = None
+    if profile.preferences.tailor_resume:
+        from resume_tailor import build_tailored_resume
+        try:
+            resume_path = build_tailored_resume(uid, app_id, profile, posting)
+        except Exception:
+            log.exception("tailored resume failed uid=%s app=%s — using static",
+                          uid, app_id)
+
     # matched -> drafted -> in_review (two hops; drafted is momentary here but
     # kept distinct so a future async pipeline can pause between them)
     if advance(db, uid, app_id, AppState.MATCHED, AppState.DRAFTED,
@@ -139,6 +149,7 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
                extra_fields={
                    "letter": letter.model_dump(mode="json"),
                    "screeningAnswers": answers.model_dump(mode="json"),
+                   "resume_path": resume_path,
                }):
         advance(db, uid, app_id, AppState.DRAFTED, AppState.IN_REVIEW)
         log.info("uid=%s app=%s drafted (v%d)", uid, app_id, version)

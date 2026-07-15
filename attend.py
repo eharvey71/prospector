@@ -120,7 +120,7 @@ async def fill_form(page, source: str, url: str, profile: dict, app_data: dict,
         await gh._fill(page, "#last_name", last)
         await gh._fill(page, "#email", profile.get("email") or prof.get("email", ""))
         await gh._fill(page, "#phone", prof.get("phone", ""))
-        resume = await fetch_resume(uid, name)
+        resume = await fetch_resume(uid, name, app_data.get("resume_path"))
         if resume:
             await gh._attach_file(page, resume, section_hint="resume")
         if letter:
@@ -142,7 +142,7 @@ async def fill_form(page, source: str, url: str, profile: dict, app_data: dict,
         await lv._fill(page, "input[name='phone']", prof.get("phone", ""))
         if await lv._fill(page, "input[name='location']", location):
             await page.keyboard.press("Escape")
-        resume = await fetch_resume(uid, name)
+        resume = await fetch_resume(uid, name, app_data.get("resume_path"))
         resume_input = page.locator("input[name='resume']").first
         if resume and await resume_input.count() > 0:
             await resume_input.set_input_files(resume)

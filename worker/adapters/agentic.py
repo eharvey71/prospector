@@ -192,7 +192,7 @@ class AgenticAdapter(SubmissionAdapter):
                 filled, failed = await self._execute(page, inventory, plan, letter)
 
                 # Resume: attach to any file input whose label says resume/cv.
-                resume_path = await fetch_resume(uid, name)
+                resume_path = await fetch_resume(uid, name, application.get("resume_path"))
                 for c in inventory:
                     if c["kind"] == "file" and re.search(
                             r"resume|\bcv\b", c["label"], re.I):

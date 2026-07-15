@@ -113,6 +113,10 @@ class Preferences(BaseModel):
     # auto-reject. "exact" states the target; "range" wraps it in a range;
     # "negotiable" gives no number.
     salary_strategy: str = "exact"
+    # Build a per-application resume PDF from profile facts, reordered and
+    # reworded against the posting (identity fields verbatim). False: the
+    # uploaded resume.pdf is attached everywhere.
+    tailor_resume: bool = True
 
 
 class UserProfile(BaseModel):
@@ -267,6 +271,9 @@ class Application(BaseModel):
     letter: Optional[Letter] = None
     screening_answers: Optional[ScreeningAnswers] = None
     submission: SubmissionRecord = Field(default_factory=SubmissionRecord)
+    # Storage path of the tailored per-application resume PDF; None -> the
+    # worker falls back to the uploaded users/{uid}/resume.pdf.
+    resume_path: Optional[str] = None
     review_note: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

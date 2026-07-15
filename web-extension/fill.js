@@ -190,6 +190,16 @@
 
   panel.append(close, h, sub, fillBtn, status);
 
+  if (pending.resumeUrl) {
+    const rl = document.createElement("a");
+    rl.href = pending.resumeUrl;
+    rl.target = "_blank";
+    rl.rel = "noreferrer";
+    rl.textContent = "Download the tailored resume ↗ — then attach it to the form";
+    rl.style.cssText = `display:block;color:${P.accent};margin-bottom:8px;text-decoration:underline`;
+    panel.append(rl);
+  }
+
   const needs = pending.needs || [];
   const known = needs.filter((e) => e.suggestion);
   const yours = needs.filter((e) => !e.suggestion);

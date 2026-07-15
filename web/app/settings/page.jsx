@@ -22,6 +22,7 @@ export default function SettingsPage() {
   const [minScore, setMinScore] = useState(70);
   const [autoDraft, setAutoDraft] = useState(true);
   const [salaryStrategy, setSalaryStrategy] = useState("exact");
+  const [tailorResume, setTailorResume] = useState(true);
   const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
   const [leverBoards, setLeverBoards] = useState("");
   const [customPages, setCustomPages] = useState(""); // career page URLs
@@ -47,6 +48,7 @@ export default function SettingsPage() {
         setMinScore(p.min_match_score ?? 70);
         setAutoDraft(p.auto_draft ?? true);
         setSalaryStrategy(p.salary_strategy || "exact");
+        setTailorResume(p.tailor_resume ?? true);
       }
       const wl = await getDoc(doc(db, "users", user.uid, "watchlist", "companies"));
       if (wl.exists()) {
@@ -70,6 +72,7 @@ export default function SettingsPage() {
         min_match_score: Number(minScore) || 70,
         auto_draft: autoDraft,
         salary_strategy: salaryStrategy,
+        tailor_resume: tailorResume,
       },
       updatedAt: serverTimestamp(),
     }, { merge: true });
@@ -179,6 +182,14 @@ export default function SettingsPage() {
           human ever looks. A range or &quot;negotiable&quot; keeps you in play;
           your target itself is set on the Profile page.
         </p>
+        <label style={{ display: "block", marginBottom: 8 }}>
+          <input type="checkbox" checked={tailorResume}
+                 onChange={e => setTailorResume(e.target.checked)} /> Tailor my
+          resume for each application <span style={{ color: T.muted, fontSize: 13 }}>
+          (a per-job PDF built from your profile facts — reordered and reworded
+          toward the posting, nothing invented. Off: your uploaded resume.pdf
+          goes everywhere.)</span>
+        </label>
         <label style={{ display: "block", marginBottom: 8 }}>
           <input type="checkbox" checked={autoDraft}
                  onChange={e => setAutoDraft(e.target.checked)} /> Draft letters

@@ -187,6 +187,24 @@ function FillSheet({ sheet }) {
   );
 }
 
+// The per-application tailored resume, as a clickable Storage link.
+function ResumeLink({ path }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    if (!path) return;
+    getDownloadURL(storageRef(storage, path)).then(setUrl).catch(() => {});
+  }, [path]);
+  if (!path) return null;
+  return url ? (
+    <a href={url} target="_blank" rel="noreferrer"
+       style={{ color: T.accent, fontSize: 13 }}>
+      Tailored resume for this job ↗
+    </a>
+  ) : (
+    <span style={{ color: T.muted, fontSize: 13 }}>Tailored resume…</span>
+  );
+}
+
 // Storage paths -> clickable links that open the screenshot in a new tab.
 // storage.rules already lets the signed-in owner read users/{uid}/**.
 function ScreenshotLinks({ paths }) {
@@ -396,9 +414,15 @@ export default function ReviewQueue() {
   // Hand this application's prepared answers to the autofill extension
   // (web-extension/), then open the posting. The extension acks via
   // postMessage; no ack = not installed.
-  function openWithAutofill(a) {
+  async function openWithAutofill(a) {
     const p = postings[a.posting_id];
     if (!p?.url) return;
+    // Extensions can't attach files, but they can hand you the download.
+    let resumeUrl = null;
+    if (a.resume_path) {
+      try { resumeUrl = await getDownloadURL(storageRef(storage, a.resume_path)); }
+      catch { /* fall through — panel just won't show the link */ }
+    }
     const sheet = a.submission?.fill_sheet || [];
     const answers = a.screeningAnswers || {};
     const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -407,6 +431,7 @@ export default function ReviewQueue() {
     const payload = {
       url: p.url, title: p.title, company: p.company,
       letter: a.letter?.text || "",
+      resumeUrl,
       values: [
         ...sheetFilled,
         ...standardKit(userDoc).filter((e) => !have.has(norm(e.field))),
@@ -552,6 +577,7 @@ export default function ReviewQueue() {
               <header>
                 <h2 style={{ margin: "0 0 4px" }}>{jobLine(a)}</h2>
                 <MatchInsight app={a} threshold={threshold} queue="review" />
+                <ResumeLink path={a.resume_path} />
               </header>
               <textarea
                 defaultValue={a.letter?.text || ""}
@@ -593,6 +619,7 @@ export default function ReviewQueue() {
                 </div>
               )}
               <FillSheet sheet={a.submission?.fill_sheet} />
+              <ResumeLink path={a.resume_path} />
               <ScreenshotLinks paths={a.submission?.screenshots} />
               <details style={{ margin: "8px 0" }}>
                 <summary style={{ cursor: "pointer" }}>Cover letter (copy-paste ready)</summary>

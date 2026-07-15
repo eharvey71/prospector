@@ -75,13 +75,19 @@ def decide_standard_answer(label: str, location: str, work_auth: str,
     return None
 
 
-async def fetch_resume(uid: str, display_name: str) -> str | None:
-    """Download the resume; attach it under a recruiter-friendly filename."""
+async def fetch_resume(uid: str, display_name: str,
+                       tailored_path: str | None = None) -> str | None:
+    """Download the resume; attach it under a recruiter-friendly filename.
+    Prefers the application's tailored resume when one exists, falling back
+    to the uploaded users/{uid}/resume.pdf."""
     if not BUCKET:
         return None
     try:
         from google.cloud import storage
-        blob = storage.Client().bucket(BUCKET).blob(f"users/{uid}/resume.pdf")
+        bucket = storage.Client().bucket(BUCKET)
+        blob = bucket.blob(tailored_path) if tailored_path else None
+        if blob is None or not blob.exists():
+            blob = bucket.blob(f"users/{uid}/resume.pdf")
         if not blob.exists():
             return None
         nice = re.sub(r"[^A-Za-z0-9]+", "_", display_name).strip("_") or "Candidate"
