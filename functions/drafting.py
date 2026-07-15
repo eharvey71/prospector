@@ -87,7 +87,9 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
         _answers_prompt(profile, posting),
         ScreeningAnswers,
         system="Write short, plain, first-person answers a candidate would "
-               "give on an application form. Never invent facts.",
+               "give on an application form. Never invent facts. Skip any "
+               "question whose answer isn't supported by the stated facts — "
+               "an unanswered question is fine, a fabricated answer is not.",
     )
 
     letter = Letter(
@@ -107,6 +109,83 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
                }):
         advance(db, uid, app_id, AppState.DRAFTED, AppState.IN_REVIEW)
         log.info("uid=%s app=%s drafted (v%d)", uid, app_id, version)
+
+
+class _EscalationSuggestion(BaseModel):
+    field: str          # copied VERBATIM from the questions list
+    suggestion: str
+
+
+class _EscalationSuggestions(BaseModel):
+    suggestions: list[_EscalationSuggestion] = Field(default_factory=list)
+
+
+def suggest_escalation_answers(db: firestore.Client, uid: str, app_id: str) -> None:
+    """When a submission escalates, draft suggested answers for the exact
+    questions the adapter couldn't answer (the fill sheet's needs_you
+    entries), from profile facts only. Suggestions are attached to the fill
+    sheet for the human to copy — never filled into any form.
+
+    Idempotent per escalation: submission.suggestions_done guards re-runs."""
+    app_ref = (db.collection("users").document(uid)
+               .collection("applications").document(app_id))
+    app_data = app_ref.get().to_dict() or {}
+    submission = app_data.get("submission") or {}
+    sheet = submission.get("fill_sheet") or []
+    needs = [e for e in sheet if e.get("status") != "filled"]
+    if not needs or submission.get("suggestions_done"):
+        return
+
+    user = db.collection("users").document(uid).get().to_dict() or {}
+    profile = UserProfile.model_validate(user)
+    posting = (db.collection("jobPostings")
+               .document(app_data.get("posting_id", "")).get().to_dict() or {})
+    tri = (lambda v: "not stated" if v is None else ("Yes" if v else "No"))
+    history = "\n".join(
+        f"- {w.title} at {w.company} ({w.start} to {w.end or 'present'}): "
+        + "; ".join(w.bullets)
+        for w in profile.work_history
+    )
+    questions = "\n".join(f"- {e.get('field')}" for e in needs)
+
+    result = generate_structured(
+        f"""CANDIDATE FACTS (the only permitted sources):
+Name: {profile.name}. Location: {profile.location or "not stated"}.
+Work authorization: {profile.work_auth or "not stated"}.
+Salary target: {profile.salary_target or "not stated"}.
+Open to relocation: {tri(profile.screeners.open_to_relocation)}.
+Willing to work in-person/onsite/hybrid: {tri(profile.screeners.onsite_ok)}.
+Skills: {", ".join(profile.skills)}.
+Work history:
+{history}
+
+JOB: {posting.get("title")} at {posting.get("company")}
+
+FORM QUESTIONS A HUMAN MUST ANSWER (from the application form):
+{questions}
+
+For each question the facts above can answer, produce a suggestion the
+candidate can copy into the form (short; for yes/no dropdowns just
+"Yes"/"No"). Copy the field text VERBATIM as the key. SKIP entirely:
+consent or legal acknowledgments, captchas, demographic/EEO questions,
+questions about interview or application history, and anything the facts
+don't cover — no suggestion is better than a guess.""",
+        _EscalationSuggestions,
+        system="You help a candidate finish a job application form by hand. "
+               "Suggest answers only from the stated facts.",
+        max_tokens=1500,
+    )
+
+    by_field = {s.field.strip(): s.suggestion.strip()
+                for s in result.suggestions if s.suggestion.strip()}
+    for e in sheet:
+        if e.get("status") != "filled" and e.get("field") in by_field:
+            e["suggestion"] = by_field[e["field"]]
+
+    app_ref.update({"submission.fill_sheet": sheet,
+                    "submission.suggestions_done": True})
+    log.info("uid=%s app=%s suggested answers for %d/%d escalated fields",
+             uid, app_id, len(by_field), len(needs))
 
 
 def _draft_prompt(profile: UserProfile, posting: dict, app_data: dict) -> str:
@@ -165,14 +244,32 @@ LETTER:
 
 
 def _answers_prompt(profile: UserProfile, posting: dict) -> str:
+    tri = (lambda v: "not stated"
+           if v is None else ("Yes" if v else "No"))
+    history = "\n".join(
+        f"- {w.title} at {w.company} ({w.start} to {w.end or 'present'}): "
+        + "; ".join(w.bullets)
+        for w in profile.work_history
+    )
     return f"""Candidate: {profile.name}, {profile.location or "location unspecified"}.
 Work authorization: {profile.work_auth or "not stated — leave work_auth null"}.
 Salary target: {profile.salary_target or "not stated — leave salary null"}.
+Open to relocation: {tri(profile.screeners.open_to_relocation)}.
+Willing to work in-person/onsite/hybrid: {tri(profile.screeners.onsite_ok)}.
 Skills: {", ".join(profile.skills)}.
+Work history:
+{history}
 
 Job: {posting.get("title")} at {posting.get("company")}.
-Description excerpt: {(posting.get("descriptionText") or "")[:2500]}
+Description excerpt: {(posting.get("descriptionText") or "")[:4000]}
 
 Fill the screening answers: why_company (2-3 sentences, specific to this
 company), salary (restate the target verbatim if provided), work_auth
-(restate verbatim if provided)."""
+(restate verbatim if provided).
+
+Then reread the description: if it states questions applicants must answer
+in their application ("tell us about...", "describe your experience
+with...", "include in your application..."), add each one to extra — key =
+the question in short form, value = the candidate's answer built ONLY from
+the facts above. Skip questions needing facts not stated here, and skip
+consent/legal acknowledgments entirely."""

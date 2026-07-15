@@ -136,7 +136,17 @@ function FillSheet({ sheet }) {
             Only you can answer these ({needs.length})
           </div>
           <ul style={{ margin: 0, paddingLeft: 18, fontSize: 14 }}>
-            {needs.map((e, i) => <li key={i}>{e.field}</li>)}
+            {needs.map((e, i) => (
+              <li key={i} style={{ marginBottom: 6 }}>
+                {e.field}
+                {e.suggestion && (
+                  <div style={{ fontSize: 13, marginTop: 2 }}>
+                    <span style={{ color: T.accent }}>suggested: </span>
+                    <span style={{ color: T.muted }}>{e.suggestion}</span>
+                  </div>
+                )}
+              </li>
+            ))}
           </ul>
         </div>
       )}

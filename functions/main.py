@@ -6,8 +6,9 @@ Triggers:
   crawl_boards            Cloud Scheduler, every 6h -> discovery
   on_posting_written      jobPostings/{id} written  -> fan out matching
   on_application_written  applications/{id} written -> route by state:
-                            matched  -> drafting
-                            approved -> enqueue Cloud Task to the worker
+                            matched     -> drafting
+                            approved    -> enqueue Cloud Task to the worker
+                            needs_human -> suggest answers for escalated fields
   on_resume_uploaded      Storage finalize on users/{uid}/resume.pdf ->
                             LLM extraction staged for review in profile UI
 """
@@ -266,6 +267,16 @@ def on_application_written(event: firestore_fn.Event) -> None:
 
     elif state == AppState.APPROVED:
         _enqueue_submission(uid, app_id, after)
+
+    elif state == AppState.NEEDS_HUMAN:
+        # Draft suggested answers for the exact questions the adapter
+        # escalated, so finishing the form by hand is copy-paste. Best
+        # effort — the card still works without suggestions.
+        from drafting import suggest_escalation_answers
+        try:
+            suggest_escalation_answers(_db(), uid, app_id)
+        except Exception:
+            log.exception("escalation suggestions failed uid=%s app=%s", uid, app_id)
 
 
 def _enqueue_submission(uid: str, app_id: str, app_data: dict) -> None:
