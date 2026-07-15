@@ -123,14 +123,18 @@ def suggest_companies(req: https_fn.CallableRequest) -> dict:
         db.collection("users").document(req.auth.uid)
         .collection("watchlist").document("companies").get().to_dict() or {}
     )
-    exclude = {s.lower() for s in wl.get("greenhouse", []) + wl.get("lever", [])}
+    exclude = {s.lower() for s in (wl.get("greenhouse", []) + wl.get("lever", [])
+                                   + wl.get("workday", []))}
     profile = db.collection("users").document(req.auth.uid).get().to_dict() or {}
+    prefs = profile.get("preferences") or {}
 
     from suggest import suggest_companies as run_suggest
     return {"companies": run_suggest(
         role, exclude,
         location=profile.get("location") or "",
-        remote_only=bool((profile.get("preferences") or {}).get("remote_only")),
+        remote_only=bool(prefs.get("remote_only")),
+        titles=prefs.get("titles") or [],
+        skills=profile.get("skills") or [],
     )}
 
 

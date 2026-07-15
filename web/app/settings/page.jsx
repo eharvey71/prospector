@@ -129,6 +129,8 @@ export default function SettingsPage() {
   function addSuggestion(s) {
     if (s.ats === "greenhouse") {
       setGhBoards(prev => [...new Set([...csv(prev), s.slug])].join(", "));
+    } else if (s.ats === "workday") {
+      setWorkdaySites(prev => [...new Set([...csv(prev), s.slug])].join(", "));
     } else {
       setLeverBoards(prev => [...new Set([...csv(prev), s.slug])].join(", "));
     }
@@ -279,6 +281,7 @@ export default function SettingsPage() {
               <strong>{s.company}</strong>{" "}
               <span style={{ color: T.muted, fontSize: 13 }}>
                 {s.ats} · {s.jobs} open roles
+                {s.ats === "workday" && " · found & drafted for you, you submit"}
               </span>
               <div style={{ color: T.muted, fontSize: 12 }}>
                 {(s.sample_titles || []).filter(Boolean).join(" · ")}
