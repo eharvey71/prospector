@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
 
 from llm import generate_structured
@@ -52,8 +53,14 @@ def match_posting_for_user(
         db.collection("users").document(uid)
         .collection("applications").document(app_id)
     )
-    if app_ref.get().exists:
-        return  # already evaluated (idempotency on replayed triggers)
+    snap = app_ref.get()
+    if snap.exists:
+        # Already evaluated (idempotency on replayed triggers). A forced
+        # re-add is the user saying "I want this one": revive it if a
+        # previous run rejected or failed it.
+        if force:
+            _revive_if_terminal(app_ref, snap.to_dict() or {})
+        return
 
     result = generate_structured(
         _match_prompt(profile, posting),
@@ -78,8 +85,38 @@ def match_posting_for_user(
         ],
         match=result,
     )
-    app_ref.set(app.model_dump(mode="json"))
+    try:
+        # create(), not set(): add_job_url's forced match and the
+        # on_posting_written fan-out both score the same posting for the
+        # same user concurrently — the slower write must lose, not clobber
+        # (a non-forced REJECTED once overwrote a user-added MATCHED here).
+        app_ref.create(app.model_dump(mode="json"))
+    except AlreadyExists:
+        log.info("uid=%s posting=%s lost creation race", uid, posting_id)
+        if force:
+            _revive_if_terminal(app_ref, app_ref.get().to_dict() or {})
+        return
     log.info("uid=%s posting=%s -> %s (%s)", uid, posting_id, state.value, note)
+
+
+def _revive_if_terminal(app_ref, current: dict) -> None:
+    """User re-added a job whose application is dead (rejected/failed):
+    flip it back to MATCHED with the gate-bypass flag so drafting reruns.
+    Applications still in flight are left untouched."""
+    state = current.get("state")
+    if state not in (AppState.REJECTED.value, AppState.FAILED.value):
+        return
+    now = datetime.now(timezone.utc)
+    app_ref.update({
+        "state": AppState.MATCHED.value,
+        "user_added": True,
+        "updatedAt": now,
+        "stateHistory": firestore.ArrayUnion([{
+            "state": AppState.MATCHED.value, "ts": now,
+            "note": f"revived from {state} — user re-added by URL",
+        }]),
+    })
+    log.info("revived %s from %s -> matched", app_ref.id, state)
 
 
 def _prefilter(profile: UserProfile, posting: dict) -> bool:
