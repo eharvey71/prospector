@@ -1,4 +1,8 @@
 // Shared dark theme + top navigation bar, used by every page.
+"use client";
+
+import { signOut } from "firebase/auth";
+import { auth } from "../lib/firebase";
 
 export const T = {
   panel: "#1d2026",
@@ -67,6 +71,16 @@ export function Nav({ active }) {
           </a>
         );
       })}
+      <span style={{ flex: 1 }} />
+      <button
+        onClick={() => signOut(auth)}
+        style={{
+          background: "none", border: "none", color: T.muted,
+          cursor: "pointer", padding: "10px 0", fontSize: 14,
+        }}
+      >
+        Sign out
+      </button>
     </nav>
   );
 }
