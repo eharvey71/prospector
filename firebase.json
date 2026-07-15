@@ -8,6 +8,7 @@
       "source": "functions",
       "codebase": "engine",
       "runtime": "python312",
+      "predeploy": ["./sync_shared.sh"],
       "ignore": ["venv", ".venv", "__pycache__", "*.pyc"]
     }
   ],

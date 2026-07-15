@@ -553,6 +553,21 @@ export default function ReviewQueue() {
               ) : (
                 <span style={{ color: T.danger }}>✗ failed — {a.submission?.error || "see logs"}</span>
               )}
+              {a.state === "failed" && (
+                <div style={{ marginTop: 10 }}>
+                  {a.letter?.text ? (
+                    <button style={btn} onClick={() =>
+                      transition(a.id, "in_review", "retried from Done — letter kept")}>
+                      Back to review (keep letter)
+                    </button>
+                  ) : (
+                    <button style={btn} onClick={() =>
+                      transition(a.id, "matched", "retry drafting from Done")}>
+                      Retry drafting
+                    </button>
+                  )}
+                </div>
+              )}
               <ScreenshotLinks paths={a.submission?.screenshots} />
             </article>
           ))}

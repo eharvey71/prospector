@@ -56,7 +56,11 @@ service cloud.firestore {
           return (before == after)
             || (before == 'matched' && after == 'rejected')
             || (before == 'in_review' && after in ['approved', 'rejected'])
-            || (before == 'needs_human' && after in ['submitted', 'rejected']);
+            || (before == 'needs_human' && after in ['submitted', 'rejected'])
+            // Human-owned retries out of failed: back to matched re-drafts
+            // (no letter yet); back to in_review re-approves an existing
+            // letter for another submission attempt.
+            || (before == 'failed' && after in ['matched', 'in_review']);
         }
 
         function onlyEditableFieldsChanged() {
