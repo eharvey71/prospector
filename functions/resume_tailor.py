@@ -167,7 +167,7 @@ def _validate(t: TailoredResume, profile: UserProfile) -> TailoredResume | None:
 # Smart punctuation the LLM loves -> latin-1 equivalents (an em dash is not
 # latin-1 and would render as '?').
 _PUNCT = {"—": "-", "–": "-", "‘": "'", "’": "'",
-          "“": '"', "”": '"', "…": "...", "•": "-",
+          "“": '"', "”": '"', "…": "...", "•": "-", "™": "(TM)",
           " ": " "}
 
 
