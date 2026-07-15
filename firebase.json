@@ -8,11 +8,13 @@
       "source": "functions",
       "codebase": "engine",
       "runtime": "python312",
+      "predeploy": ["./sync_shared.sh"],
       "ignore": ["venv", ".venv", "__pycache__", "*.pyc"]
     }
   ],
   "hosting": {
     "public": "web/out",
+    "cleanUrls": true,
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [{ "source": "**", "destination": "/index.html" }]
   },

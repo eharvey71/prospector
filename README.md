@@ -84,7 +84,11 @@ gcloud run deploy job-engine-worker \
   --region us-central1 \
   --no-allow-unauthenticated \
   --concurrency 1 --memory 2Gi --timeout 900 \
-  --set-env-vars STORAGE_BUCKET=your-project-id.appspot.com,SUBMIT_DRY_RUN=true
+  --set-env-vars STORAGE_BUCKET=your-project-id.appspot.com,SUBMIT_DRY_RUN=true \
+  --set-secrets ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest
+# The secret powers the Tier 2 agentic adapter; create it once with
+#   gcloud secrets create ANTHROPIC_API_KEY --data-file=- <<< "sk-ant-..."
+# (or reuse the secret Firebase created for functions).
 
 # Cloud Tasks queue with polite per-queue rate limiting
 gcloud tasks queues create submissions \
@@ -128,7 +132,11 @@ npm run deploy               # build + firebase deploy --only hosting
    the profile page — apply it, review the fields, and Save. (Nothing is
    written to your live profile without that explicit apply + save.)
 3. Fill in what extraction can't know: writing samples, preferences, salary
-   target, and the company watchlist (all on the same page).
+   target, and the company watchlist (all on the same page). The watchlist
+   takes Greenhouse/Lever board slugs plus arbitrary career-page URLs; the
+   "Find companies for me" box suggests verified boards for a role
+   description. One-off jobs from anywhere can be pasted into the box at
+   the top of the review queue.
 4. Trigger a crawl manually (Cloud Scheduler console → force run) or wait 6h.
 5. Watch applications appear in the review queue.
 
@@ -144,10 +152,6 @@ npm run deploy               # build + firebase deploy --only hosting
 
 ## What's intentionally not here yet
 
-- **Lever Tier-1 adapter** — clone the Greenhouse adapter's shape against
-  `jobs.lever.co/.../apply` forms.
-- **Tier 2 agentic adapter** for unknown ATSes — implements the same
-  `SubmissionAdapter` interface; the worker routing already supports it.
 - **Gmail feedback loop** (confirmations/rejections → status updates).
 - **Workday** — permanently Tier 3 until you hate yourself enough.
 

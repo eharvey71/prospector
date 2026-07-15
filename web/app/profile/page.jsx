@@ -1,7 +1,9 @@
 "use client";
-// Profile editor — replaces seed.py for day-to-day profile management.
-// Everything writes to users/{uid} (and watchlist/companies), which the
-// deployed firestore.rules already permit for the signed-in owner.
+// Profile editor — who you are: basics, resume, work history, writing
+// samples. Engine behavior (matching preferences, company watchlist) lives
+// on /settings.
+// Saving writes ONLY the profile fields below, so it can never clobber
+// preferences edited on the Settings page (and vice versa).
 // Resume uploads land at users/{uid}/resume.pdf — the exact path the
 // submission worker's adapter fetches from.
 
@@ -10,27 +12,10 @@ import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
 import { deleteDoc, doc, getDoc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
 import { ref, uploadBytes, getMetadata } from "firebase/storage";
 import { auth, db, googleProvider, storage } from "../../lib/firebase";
+import { T, Nav, box, btn, btnPrimary, input, label } from "../ui";
 
 const EMPTY_ROLE = { company: "", title: "", start: "", end: "", bullets: [""] };
 const EMPTY_SAMPLE = { title: "", text: "" };
-
-const T = {
-  panel: "#1d2026", panelAlt: "#22262e", border: "#33383f",
-  text: "#e2e4e9", muted: "#9aa1ad", ok: "#7fbf7f", danger: "#e06c75",
-  accent: "#6f9ff3",
-};
-const box = { background: T.panel, border: `1px solid ${T.border}`, borderRadius: 8, padding: 16, marginBottom: 20 };
-const input = {
-  display: "block", width: "100%", margin: "4px 0 12px", padding: 8,
-  boxSizing: "border-box", background: T.panelAlt, color: T.text,
-  border: `1px solid ${T.border}`, borderRadius: 6,
-};
-const label = { fontSize: 13, fontWeight: 600, color: T.muted };
-const btn = {
-  background: T.panelAlt, color: T.text, border: `1px solid ${T.border}`,
-  borderRadius: 6, padding: "8px 16px", cursor: "pointer",
-};
-const btnPrimary = { ...btn, background: T.accent, color: "#10131a", border: "none", fontWeight: 600 };
 
 export default function ProfilePage() {
   const [user, setUser] = useState(null);
@@ -41,18 +26,18 @@ export default function ProfilePage() {
   // Flat profile fields
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [linkedin, setLinkedin] = useState("");
+  const [website, setWebsite] = useState("");
   const [location, setLocation] = useState("");
   const [workAuth, setWorkAuth] = useState("");
   const [salaryTarget, setSalaryTarget] = useState("");
   const [skills, setSkills] = useState("");           // comma-separated in UI
-  const [titles, setTitles] = useState("");           // comma-separated
-  const [remoteOnly, setRemoteOnly] = useState(false);
-  const [excludeCompanies, setExcludeCompanies] = useState("");
-  const [minScore, setMinScore] = useState(70);
   const [history, setHistory] = useState([]);
   const [samples, setSamples] = useState([]);
-  const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
-  const [leverBoards, setLeverBoards] = useState("");
+  // Standard screeners: "" = not set (question escalates), "yes"/"no"
+  const [relocation, setRelocation] = useState("");
+  const [onsite, setOnsite] = useState("");
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
@@ -66,7 +51,7 @@ export default function ProfilePage() {
     );
   }, [user]);
 
-  // Load existing profile + watchlist + resume status
+  // Load existing profile + resume status
   useEffect(() => {
     if (!user) return;
     (async () => {
@@ -75,23 +60,26 @@ export default function ProfilePage() {
         const d = snap.data();
         setName(d.name || "");
         setEmail(d.email || user.email || "");
+        setPhone(d.phone || "");
+        setLinkedin(d.linkedin || "");
+        setWebsite(d.website || "");
         setLocation(d.location || "");
         setWorkAuth(d.work_auth || "");
         setSalaryTarget(d.salary_target || "");
         setSkills((d.skills || []).join(", "));
-        setTitles((d.preferences?.titles || []).join(", "));
-        setRemoteOnly(!!d.preferences?.remote_only);
-        setExcludeCompanies((d.preferences?.exclude_companies || []).join(", "));
-        setMinScore(d.preferences?.min_match_score ?? 70);
-        setHistory((d.work_history || []).map(r => ({ ...r, end: r.end || "" })));
-        setSamples(d.writing_samples || []);
+        setHistory((d.work_history || []).map(r => ({
+          company: r.company || "", title: r.title || "",
+          start: r.start || "", end: r.end || "",
+          bullets: Array.isArray(r.bullets) && r.bullets.length ? r.bullets : [""],
+        })));
+        setSamples((d.writing_samples || []).map(s => ({
+          title: s.title || "", text: s.text || "",
+        })));
+        const tri = (v) => (v === true ? "yes" : v === false ? "no" : "");
+        setRelocation(tri(d.screeners?.open_to_relocation));
+        setOnsite(tri(d.screeners?.onsite_ok));
       } else {
         setEmail(user.email || "");
-      }
-      const wl = await getDoc(doc(db, "users", user.uid, "watchlist", "companies"));
-      if (wl.exists()) {
-        setGhBoards((wl.data().greenhouse || []).join(", "));
-        setLeverBoards((wl.data().lever || []).join(", "));
       }
       try {
         const meta = await getMetadata(ref(storage, `users/${user.uid}/resume.pdf`));
@@ -109,6 +97,9 @@ export default function ProfilePage() {
     const profile = {
       name,
       email,
+      phone: phone || null,
+      linkedin: linkedin || null,
+      website: website || null,
       location: location || null,
       work_auth: workAuth || null,
       salary_target: salaryTarget || null,
@@ -116,22 +107,16 @@ export default function ProfilePage() {
       work_history: history.map(r => ({
         company: r.company, title: r.title, start: r.start,
         end: r.end || null,
-        bullets: r.bullets.filter(Boolean),
+        bullets: (r.bullets || []).filter(Boolean),
       })),
       writing_samples: samples.filter(s => s.title || s.text),
-      preferences: {
-        titles: csv(titles),
-        remote_only: remoteOnly,
-        exclude_companies: csv(excludeCompanies),
-        min_match_score: Number(minScore) || 70,
+      screeners: {
+        open_to_relocation: relocation === "" ? null : relocation === "yes",
+        onsite_ok: onsite === "" ? null : onsite === "yes",
       },
       updatedAt: serverTimestamp(),
     };
     await setDoc(doc(db, "users", user.uid), profile, { merge: true });
-    await setDoc(doc(db, "users", user.uid, "watchlist", "companies"), {
-      greenhouse: csv(ghBoards),
-      lever: csv(leverBoards),
-    });
     setStatus("Saved ✓");
     setTimeout(() => setStatus(""), 2500);
   }
@@ -191,14 +176,13 @@ export default function ProfilePage() {
   }
 
   return (
-    <main style={{ padding: 40, maxWidth: 760, margin: "0 auto" }}>
-      <nav style={{ marginBottom: 20 }}>
-        <a href="/" style={{ color: T.accent }}>← Review queue</a>
-      </nav>
+    <main style={{ padding: "24px 40px 40px", maxWidth: 760, margin: "0 auto" }}>
+      <Nav active="/profile" />
       <h1>Profile</h1>
       <p style={{ color: T.muted }}>
         This is what the engine knows about you. Matching scores against it,
-        and cover letters can only claim what&apos;s written here.
+        and cover letters can only claim what&apos;s written here. Which
+        companies to watch and how picky to be lives in Settings.
       </p>
 
       <section style={box}>
@@ -207,7 +191,14 @@ export default function ProfilePage() {
         <input style={input} value={name} onChange={e => setName(e.target.value)} />
         <span style={label}>Email (goes on applications)</span>
         <input style={input} value={email} onChange={e => setEmail(e.target.value)} />
-        <span style={label}>Location</span>
+        <span style={label}>Phone</span>
+        <input style={input} value={phone} onChange={e => setPhone(e.target.value)} />
+        <span style={label}>LinkedIn profile URL</span>
+        <input style={input} value={linkedin} placeholder="https://www.linkedin.com/in/…"
+               onChange={e => setLinkedin(e.target.value)} />
+        <span style={label}>Website / portfolio (optional)</span>
+        <input style={input} value={website} onChange={e => setWebsite(e.target.value)} />
+        <span style={label}>Location (City, ST — e.g. Richmond, VA)</span>
         <input style={input} value={location} onChange={e => setLocation(e.target.value)} />
         <span style={label}>Work authorization</span>
         <input style={input} value={workAuth} onChange={e => setWorkAuth(e.target.value)} />
@@ -215,6 +206,28 @@ export default function ProfilePage() {
         <input style={input} value={salaryTarget} onChange={e => setSalaryTarget(e.target.value)} />
         <span style={label}>Skills (comma-separated)</span>
         <textarea style={{ ...input, height: 70 }} value={skills} onChange={e => setSkills(e.target.value)} />
+      </section>
+
+      <section style={box}>
+        <h2>Standard application answers</h2>
+        <p style={{ color: T.muted, fontSize: 13 }}>
+          Almost every application asks these. Set them once and the engine
+          answers them for you; leave one unset and that question comes back
+          to you instead. (Consent questions and &quot;have you interviewed
+          here before&quot; always come back to you.)
+        </p>
+        <span style={label}>Open to relocation?</span>
+        <select style={input} value={relocation} onChange={e => setRelocation(e.target.value)}>
+          <option value="">Not set — ask me each time</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
+        <span style={label}>Willing to work in-person / hybrid (some days in an office)?</span>
+        <select style={input} value={onsite} onChange={e => setOnsite(e.target.value)}>
+          <option value="">Not set — ask me each time</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+        </select>
       </section>
 
       <section style={box}>
@@ -269,7 +282,7 @@ export default function ProfilePage() {
             <span style={label}>Bullets (one per line — these are the facts letters can use)</span>
             <textarea
               style={{ ...input, height: 110 }}
-              value={r.bullets.join("\n")}
+              value={(r.bullets || []).join("\n")}
               onChange={e => setRole(i, { bullets: e.target.value.split("\n") })}
             />
             <button style={btn} onClick={() => setHistory(h => h.filter((_, j) => j !== i))}>
@@ -303,29 +316,6 @@ export default function ProfilePage() {
         <button style={btn} onClick={() => setSamples(x => [...x, { ...EMPTY_SAMPLE }])}>
           + Add sample
         </button>
-      </section>
-
-      <section style={box}>
-        <h2>Matching preferences</h2>
-        <span style={label}>Target titles (comma-separated)</span>
-        <input style={input} value={titles} onChange={e => setTitles(e.target.value)} />
-        <span style={label}>Exclude companies (comma-separated)</span>
-        <input style={input} value={excludeCompanies} onChange={e => setExcludeCompanies(e.target.value)} />
-        <span style={label}>Minimum match score (0-100)</span>
-        <input style={input} type="number" min="0" max="100" value={minScore}
-               onChange={e => setMinScore(e.target.value)} />
-        <label style={{ display: "block", marginBottom: 8 }}>
-          <input type="checkbox" checked={remoteOnly}
-                 onChange={e => setRemoteOnly(e.target.checked)} /> Remote only
-        </label>
-      </section>
-
-      <section style={box}>
-        <h2>Company watchlist</h2>
-        <span style={label}>Greenhouse board slugs (comma-separated — the SLUG in boards.greenhouse.io/SLUG)</span>
-        <input style={input} value={ghBoards} onChange={e => setGhBoards(e.target.value)} />
-        <span style={label}>Lever board slugs (jobs.lever.co/SLUG)</span>
-        <input style={input} value={leverBoards} onChange={e => setLeverBoards(e.target.value)} />
       </section>
 
       <div style={{ position: "sticky", bottom: 0, background: "#15171c", padding: "12px 0" }}>

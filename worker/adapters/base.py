@@ -17,6 +17,9 @@ class SubmissionOutcome:
     reason: str | None = None
     escalate: bool = False           # True -> go straight to NEEDS_HUMAN, no retry
     screenshots: list[str] = field(default_factory=list)  # Storage paths
+    # What was filled/prepared before escalating — the human's checklist:
+    # [{"field": label, "value": str|None, "status": "filled"|"needs_you"}]
+    fill_sheet: list[dict] = field(default_factory=list)
 
 
 class SubmissionAdapter(ABC):

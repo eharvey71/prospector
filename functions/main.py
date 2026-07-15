@@ -6,8 +6,9 @@ Triggers:
   crawl_boards            Cloud Scheduler, every 6h -> discovery
   on_posting_written      jobPostings/{id} written  -> fan out matching
   on_application_written  applications/{id} written -> route by state:
-                            matched  -> drafting
-                            approved -> enqueue Cloud Task to the worker
+                            matched     -> drafting
+                            approved    -> enqueue Cloud Task to the worker
+                            needs_human -> suggest answers for escalated fields
   on_resume_uploaded      Storage finalize on users/{uid}/resume.pdf ->
                             LLM extraction staged for review in profile UI
 """
@@ -25,7 +26,7 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 from firebase_admin import initialize_app
-from firebase_functions import firestore_fn, options, scheduler_fn, storage_fn
+from firebase_functions import firestore_fn, https_fn, options, scheduler_fn, storage_fn
 from google.cloud import firestore, tasks_v2
 
 from schemas import AppState, AtsType, SubmitTask
@@ -62,8 +63,11 @@ def _db() -> firestore.Client:
 # Discovery (scheduled)
 # ---------------------------------------------------------------------------
 
-@scheduler_fn.on_schedule(schedule="every 6 hours", timeout_sec=540)
+@scheduler_fn.on_schedule(schedule="every 6 hours", timeout_sec=540,
+                          secrets=["ANTHROPIC_API_KEY"])
 def crawl_boards(event: scheduler_fn.ScheduledEvent) -> None:
+    # Needs the LLM secret because custom career-page crawling classifies
+    # links with generate_structured (see discovery._crawl_career_page).
     from discovery import run_discovery
     run_discovery(_db())
 
@@ -96,6 +100,116 @@ def on_posting_written(event: firestore_fn.Event) -> None:
             match_posting_for_user(db, user_doc.id, posting_id, posting)
         except Exception:
             log.exception("matching failed uid=%s posting=%s", user_doc.id, posting_id)
+
+
+# ---------------------------------------------------------------------------
+# Company suggester (callable from the profile UI). LLM proposes, the board
+# APIs verify; the client decides what joins the watchlist.
+# ---------------------------------------------------------------------------
+
+@https_fn.on_call(timeout_sec=300, secrets=["ANTHROPIC_API_KEY"])
+def suggest_companies(req: https_fn.CallableRequest) -> dict:
+    if req.auth is None:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.UNAUTHENTICATED, "sign in first")
+    role = (req.data or {}).get("role", "").strip()
+    if not role:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.INVALID_ARGUMENT, "role is required")
+
+    db = _db()
+    # Companies already on the watchlist aren't suggested again.
+    wl = (
+        db.collection("users").document(req.auth.uid)
+        .collection("watchlist").document("companies").get().to_dict() or {}
+    )
+    exclude = {s.lower() for s in wl.get("greenhouse", []) + wl.get("lever", [])}
+    profile = db.collection("users").document(req.auth.uid).get().to_dict() or {}
+
+    from suggest import suggest_companies as run_suggest
+    return {"companies": run_suggest(
+        role, exclude,
+        location=profile.get("location") or "",
+        remote_only=bool((profile.get("preferences") or {}).get("remote_only")),
+    )}
+
+
+# ---------------------------------------------------------------------------
+# Track a company by name: resolve its ATS and register it automatically.
+# ---------------------------------------------------------------------------
+
+@https_fn.on_call(timeout_sec=120, secrets=["ANTHROPIC_API_KEY"])
+def track_company(req: https_fn.CallableRequest) -> dict:
+    if req.auth is None:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.UNAUTHENTICATED, "sign in first")
+    name = (req.data or {}).get("name", "").strip()
+    if not name:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.INVALID_ARGUMENT, "name is required")
+
+    from track import track_company as run_track
+    return run_track(_db(), req.auth.uid, name)
+
+
+# ---------------------------------------------------------------------------
+# Manual drafting: with auto_draft off, the UI requests each letter.
+# ---------------------------------------------------------------------------
+
+@https_fn.on_call(timeout_sec=540, secrets=["ANTHROPIC_API_KEY"])
+def request_draft(req: https_fn.CallableRequest) -> dict:
+    if req.auth is None:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.UNAUTHENTICATED, "sign in first")
+    app_id = (req.data or {}).get("app_id", "").strip()
+    if not app_id:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.INVALID_ARGUMENT, "app_id is required")
+
+    db = _db()
+    app_snap = (
+        db.collection("users").document(req.auth.uid)
+        .collection("applications").document(app_id).get()
+    )
+    if not app_snap.exists or app_snap.to_dict().get("state") != AppState.MATCHED.value:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.FAILED_PRECONDITION,
+            "application not found or not awaiting drafting")
+
+    from drafting import draft_application
+    draft_application(db, req.auth.uid, app_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------------------
+# User-added job by URL: the front door for ATSes the crawler doesn't know.
+# Creates a source=unknown posting (Tier 2 submission) and matches it for
+# the requesting user with the score gate bypassed — they chose it.
+# ---------------------------------------------------------------------------
+
+@https_fn.on_call(timeout_sec=300, secrets=["ANTHROPIC_API_KEY"])
+def add_job_url(req: https_fn.CallableRequest) -> dict:
+    if req.auth is None:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.UNAUTHENTICATED, "sign in first")
+    url = (req.data or {}).get("url", "").strip()
+    if not url.startswith("http"):
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.INVALID_ARGUMENT, "url is required")
+
+    from matching import match_posting_for_user
+    from urljob import create_posting_from_url
+    db = _db()
+    try:
+        posting_id, posting = create_posting_from_url(db, url)
+    except ValueError as exc:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.FAILED_PRECONDITION, str(exc))
+
+    match_posting_for_user(db, req.auth.uid, posting_id, posting, force=True)
+    return {"posting_id": posting_id,
+            "company": posting.get("company"),
+            "title": posting.get("title")}
 
 
 # ---------------------------------------------------------------------------
@@ -135,16 +249,34 @@ def on_application_written(event: firestore_fn.Event) -> None:
     state = AppState(after["state"])
 
     if state == AppState.MATCHED:
+        db = _db()
+        # Manual-drafting mode: matches wait in the UI for a per-application
+        # "write the letter" (request_draft). User-pasted jobs always draft.
+        prefs = (db.collection("users").document(uid).get().to_dict()
+                 or {}).get("preferences") or {}
+        if not prefs.get("auto_draft", True) and not after.get("user_added"):
+            log.info("auto_draft off; app %s waits in matched", app_id)
+            return
         from drafting import draft_application
         try:
-            draft_application(_db(), uid, app_id)
+            draft_application(db, uid, app_id)
         except Exception:
             log.exception("drafting failed uid=%s app=%s", uid, app_id)
-            advance(_db(), uid, app_id, AppState.MATCHED, AppState.FAILED,
+            advance(db, uid, app_id, AppState.MATCHED, AppState.FAILED,
                     note="drafting error; see logs")
 
     elif state == AppState.APPROVED:
         _enqueue_submission(uid, app_id, after)
+
+    elif state == AppState.NEEDS_HUMAN:
+        # Draft suggested answers for the exact questions the adapter
+        # escalated, so finishing the form by hand is copy-paste. Best
+        # effort — the card still works without suggestions.
+        from drafting import suggest_escalation_answers
+        try:
+            suggest_escalation_answers(_db(), uid, app_id)
+        except Exception:
+            log.exception("escalation suggestions failed uid=%s app=%s", uid, app_id)
 
 
 def _enqueue_submission(uid: str, app_id: str, app_data: dict) -> None:

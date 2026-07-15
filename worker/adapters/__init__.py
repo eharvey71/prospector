@@ -4,13 +4,15 @@ from __future__ import annotations
 
 from schemas import AtsType
 
+from .agentic import AgenticAdapter
 from .base import SubmissionAdapter
 from .greenhouse import GreenhouseAdapter
+from .lever import LeverAdapter
 
 _REGISTRY: dict[AtsType, SubmissionAdapter] = {
     AtsType.GREENHOUSE: GreenhouseAdapter(),
-    # AtsType.LEVER: LeverAdapter(),      # next: jobs.lever.co/apply forms
-    # AtsType.UNKNOWN: AgenticAdapter(),  # Tier 2, LLM-driven, later
+    AtsType.LEVER: LeverAdapter(),
+    AtsType.UNKNOWN: AgenticAdapter(),  # Tier 2: LLM plans, code fills+verifies
 }
 
 

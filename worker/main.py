@@ -2,9 +2,8 @@
 
 Receives Cloud Tasks at POST /submit, routes by ATS type:
   Tier 1  deterministic Playwright adapter (greenhouse, lever)
+  Tier 2  agentic adapter for unknown ATSes (LLM plans, code fills+verifies)
   Tier 3  escalate to NEEDS_HUMAN with pre-filled answers
-(Tier 2, the agentic form-filler for unknown ATSes, slots in later behind the
-same interface — see adapters/base.py.)
 
 HTTP semantics for Cloud Tasks: 2xx = done (success OR handled escalation);
 5xx = retry with backoff. Escalations return 200 on purpose so the queue
@@ -22,7 +21,7 @@ from google.cloud import firestore
 
 from adapters import get_adapter
 from adapters.base import SubmissionOutcome
-from schemas import AppState, SubmitTask
+from schemas import AppState, AtsType, SubmitTask
 from state_machine import advance
 
 logging.basicConfig(level=logging.INFO)
@@ -62,7 +61,13 @@ async def submit(request: Request) -> dict:
 
     adapter = get_adapter(task.ats_type)
     if adapter is None:
-        _escalate(task, "no adapter for this ATS")
+        reason = (
+            "Workday requires an account — application prepared, submit it "
+            "yourself at the job URL"
+            if task.ats_type == AtsType.WORKDAY
+            else f"no automated adapter for {task.ats_type.value} — submit manually"
+        )
+        _escalate(task, reason)
         return {"status": "needs_human"}
 
     app_ref = (
@@ -105,7 +110,8 @@ async def submit(request: Request) -> dict:
         return {"status": "submitted"}
 
     if outcome.escalate or attempts >= MAX_ATTEMPTS:
-        _escalate(task, outcome.reason or "adapter escalated", attempts, outcome.screenshots)
+        _escalate(task, outcome.reason or "adapter escalated", attempts,
+                  outcome.screenshots, outcome.fill_sheet)
         return {"status": "needs_human"}
 
     _requeue(task, attempts, outcome.reason or "retryable failure")
@@ -113,13 +119,15 @@ async def submit(request: Request) -> dict:
 
 
 def _escalate(task: SubmitTask, reason: str, attempts: int = 0,
-              screenshots: list[str] | None = None) -> None:
+              screenshots: list[str] | None = None,
+              fill_sheet: list[dict] | None = None) -> None:
     assert db is not None
     advance(db, task.uid, task.app_id, AppState.SUBMITTING, AppState.NEEDS_HUMAN,
             note=reason,
             extra_fields={"submission": {
                 "tier": 3, "attempts": attempts,
                 "screenshots": screenshots or [], "error": reason,
+                "fill_sheet": fill_sheet or [],
             }})
 
 

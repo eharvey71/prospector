@@ -20,42 +20,19 @@ from __future__ import annotations
 import logging
 import os
 import re
-import tempfile
-from datetime import datetime, timezone
 
 from playwright.async_api import async_playwright
 
 from .base import SubmissionAdapter, SubmissionOutcome
+from .common import (
+    DRY_RUN,
+    decide_standard_answer,
+    fetch_resume,
+    option_matches,
+    take_screenshot,
+)
 
 log = logging.getLogger("adapter.greenhouse")
-
-DRY_RUN = os.environ.get("SUBMIT_DRY_RUN", "true").lower() == "true"
-BUCKET = os.environ.get("STORAGE_BUCKET", "")
-
-US_LOCATION_HINTS = (
-    "united states", "usa", ", va", ", ca", ", ny", ", tx", ", wa", ", ma",
-    ", pa", ", il", ", ga", ", nc", ", fl", ", oh", ", co", ", or", ", md",
-)
-US_CITIZEN_HINTS = ("us citizen", "u.s. citizen", "citizen", "green card",
-                    "permanent resident", "authorized to work")
-
-
-def _option_matches(answer: str, option_text: str) -> bool:
-    """Strict option matching. 'No' must match 'No' or 'No.' — and must NEVER
-    match 'Yes, but not one of the visas listed here'. Rules:
-      1. Exact match (modulo trailing punctuation) always wins.
-      2. Otherwise the option must START with the answer as a whole word,
-         and the yes/no polarity of both strings must agree.
-    """
-    a = answer.strip().lower()
-    t = option_text.strip().lower()
-    if re.fullmatch(rf"{re.escape(a)}[.,!]?", t):
-        return True
-    if not re.match(rf"^{re.escape(a)}\b", t):
-        return False
-    a_yes, t_yes = a.startswith("yes"), t.startswith("yes")
-    a_no, t_no = a.startswith("no"), t.startswith("no")
-    return a_yes == t_yes and a_no == t_no
 
 
 class GreenhouseAdapter(SubmissionAdapter):
@@ -71,6 +48,14 @@ class GreenhouseAdapter(SubmissionAdapter):
         location = (profile.get("location") or prof.get("location") or "")
         work_auth = (profile.get("work_auth") or prof.get("work_auth")
                      or answers.get("work_auth") or "")
+        screeners = profile.get("screeners") or prof.get("screeners") or {}
+
+        # Everything filled or left open, reported back on escalation so the
+        # human finishes the form from a checklist.
+        sheet: list[dict] = []
+
+        def note(field_label: str, value, status: str = "filled") -> None:
+            sheet.append({"field": field_label, "value": value, "status": status})
 
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
@@ -93,45 +78,59 @@ class GreenhouseAdapter(SubmissionAdapter):
 
                 # --- core fields ---
                 first, _, last = name.partition(" ")
-                await self._fill(page, "#first_name", first)
-                await self._fill(page, "#last_name", last)
-                await self._fill(page, "#email", profile.get("email") or prof.get("email", ""))
-                await self._fill(page, "#phone", prof.get("phone", ""))
+                email = profile.get("email") or prof.get("email", "")
+                phone = prof.get("phone", "")
+                if await self._fill(page, "#first_name", first):
+                    note("First name", first)
+                if await self._fill(page, "#last_name", last):
+                    note("Last name", last)
+                if await self._fill(page, "#email", email):
+                    note("Email", email)
+                if await self._fill(page, "#phone", phone):
+                    note("Phone", phone)
 
                 # --- resume: direct input, else Attach button/file chooser ---
-                resume_path = await self._fetch_resume(uid, name)
+                resume_path = await fetch_resume(uid, name)
                 if resume_path:
-                    await self._attach_file(page, resume_path, section_hint="resume")
+                    if await self._attach_file(page, resume_path, section_hint="resume"):
+                        note("Resume", os.path.basename(resume_path))
 
                 # --- cover letter: textarea, else Enter-manually reveal ---
                 if letter:
-                    await self._enter_cover_letter(page, letter)
+                    if await self._enter_cover_letter(page, letter):
+                        note("Cover letter", "entered (full text on this card)")
 
                 # --- deterministic dropdown answering ---
                 answered, unanswerable = await self._handle_dropdowns(
                     page, location=location, work_auth=work_auth,
+                    screeners=screeners,
                 )
-                log.info("dropdowns answered=%s unanswerable=%s", answered, unanswerable)
+                for lbl, ans in answered:
+                    note(lbl, ans)
+                log.info("dropdowns answered=%s unanswerable=%s",
+                         [l for l, _ in answered], unanswerable)
 
                 # --- required fields still empty -> escalate ---
                 unmapped = await self._unmapped_required(page)
                 if unmapped or unanswerable:
                     remaining = unanswerable + [u for u in unmapped if u not in unanswerable]
-                    shots.append(await self._shot(page, uid, app_id, "unmapped"))
+                    for u in remaining:
+                        note(u, None, "needs_you")
+                    shots.append(await take_screenshot(page, uid, app_id, "unmapped"))
                     return SubmissionOutcome(
                         success=False, tier=self.tier, escalate=True,
-                        screenshots=shots,
+                        screenshots=shots, fill_sheet=sheet,
                         reason="required fields need a human: "
                                + ", ".join(remaining[:8]),
                     )
 
-                shots.append(await self._shot(page, uid, app_id, "pre_submit"))
+                shots.append(await take_screenshot(page, uid, app_id, "pre_submit"))
 
                 if DRY_RUN:
                     log.info("DRY RUN — not submitting %s", job_url)
                     return SubmissionOutcome(
                         success=False, tier=self.tier, escalate=True,
-                        screenshots=shots,
+                        screenshots=shots, fill_sheet=sheet,
                         reason="dry run: form fully filled, submission skipped "
                                "(set SUBMIT_DRY_RUN=false to go live)",
                     )
@@ -144,7 +143,7 @@ class GreenhouseAdapter(SubmissionAdapter):
                 confirmed = await page.locator(
                     "text=/thank you|application.*(submitted|received)/i"
                 ).count() > 0
-                shots.append(await self._shot(page, uid, app_id, "post_submit"))
+                shots.append(await take_screenshot(page, uid, app_id, "post_submit"))
 
                 if confirmed:
                     return SubmissionOutcome(success=True, tier=self.tier, screenshots=shots)
@@ -238,24 +237,10 @@ class GreenhouseAdapter(SubmissionAdapter):
     # unanswerable (by label, so the escalation reason is human-readable).
     # ------------------------------------------------------------------
 
-    def _decide(self, label: str, location: str, work_auth: str) -> str | None:
-        q = label.lower()
-        loc = location.lower()
-        auth = work_auth.lower()
-        in_us = any(h in loc for h in US_LOCATION_HINTS)
-        us_authorized = any(h in auth for h in US_CITIZEN_HINTS)
-
-        if re.search(r"country of residence|country.*(located|reside)|where are you.*based|currently based", q):
-            return "United States" if in_us else None
-        if re.search(r"require.*sponsorship|sponsorship.*visa|visa.*sponsor", q):
-            return "No" if us_authorized else None
-        if re.search(r"authorized to work|legally.*work", q):
-            return "Yes" if us_authorized else None
-        return None  # self-assessments, legal restrictions, prior-employment: escalate
-
-    async def _handle_dropdowns(self, page, *, location: str, work_auth: str
-                                ) -> tuple[list[str], list[str]]:
-        answered: list[str] = []
+    async def _handle_dropdowns(self, page, *, location: str, work_auth: str,
+                                screeners: dict | None = None,
+                                ) -> tuple[list[tuple[str, str]], list[str]]:
+        answered: list[tuple[str, str]] = []   # (label, answer given)
         unanswerable: list[str] = []
 
         combos = page.locator(
@@ -314,7 +299,7 @@ class GreenhouseAdapter(SubmissionAdapter):
                     " || el.closest('div')?.textContent.includes('*')"
                 )
 
-                answer = self._decide(label, location, work_auth)
+                answer = decide_standard_answer(label, location, work_auth, screeners)
                 if answer is None:
                     if required:
                         unanswerable.append(label.replace("*", "").strip()[:60])
@@ -323,7 +308,7 @@ class GreenhouseAdapter(SubmissionAdapter):
                 tag = await combo.evaluate("el => el.tagName.toLowerCase()")
                 if tag == "select":
                     await combo.select_option(label=re.compile(rf"^{re.escape(answer)}", re.I))
-                    answered.append(label.replace("*", "").strip()[:60])
+                    answered.append((label.replace("*", "").strip()[:60], answer))
                     continue
 
                 # Combobox widgets: select, then VERIFY, else revert+escalate.
@@ -345,7 +330,7 @@ class GreenhouseAdapter(SubmissionAdapter):
                     raw = ((await opt.text_content()) or "").strip()
                     # Normalize numbered options: '1. United States of America'
                     text = re.sub(r"^\s*\d+[.)]\s*", "", raw)
-                    if _option_matches(answer, text):
+                    if option_matches(answer, text):
                         candidates.append((j, text))
                 if len(candidates) == 1:
                     await options.nth(candidates[0][0]).click()
@@ -367,30 +352,37 @@ class GreenhouseAdapter(SubmissionAdapter):
                 # renders the choice into a '[class*=single-value]' element
                 # inside the CONTROL container. Walk starts at the PARENT —
                 # the input's own class (select__input) would false-match.
+                # The re-render after the option click is ASYNC — a single
+                # immediate read races it and reverts good selections, so
+                # poll for up to ~2.5s before giving up.
                 verified = False
                 shown = ""
                 if picked:
-                    shown = (await combo.evaluate("""
-                        el => {
-                            let n = el.parentElement;
-                            let control = null;
-                            for (let d = 0; d < 6 && n; d++) {
-                                if (n.className && /control/.test(String(n.className))) {
-                                    control = n; break;
+                    for _ in range(8):
+                        shown = (await combo.evaluate("""
+                            el => {
+                                let n = el.parentElement;
+                                let control = null;
+                                for (let d = 0; d < 6 && n; d++) {
+                                    if (n.className && /control/.test(String(n.className))) {
+                                        control = n; break;
+                                    }
+                                    n = n.parentElement;
                                 }
-                                n = n.parentElement;
+                                const scope = control || el.closest('div')?.parentElement || el.parentElement;
+                                const sv = scope?.querySelector("[class*='single-value'], [class*='selected']");
+                                return (sv?.textContent || scope?.textContent || '').trim();
                             }
-                            const scope = control || el.closest('div')?.parentElement || el.parentElement;
-                            const sv = scope?.querySelector("[class*='single-value'], [class*='selected']");
-                            return (sv?.textContent || scope?.textContent || '').trim();
-                        }
-                    """)) or ""
-                    verified = answer.lower() in shown.lower()
+                        """)) or ""
+                        if answer.lower() in shown.lower():
+                            verified = True
+                            break
+                        await page.wait_for_timeout(300)
                 log.info("dropdown %r: answer=%r picked=%s shown=%r verified=%s",
                          label[:50], answer, picked, shown[:80], verified)
 
                 if picked and verified:
-                    answered.append(label.replace("*", "").strip()[:60])
+                    answered.append((label.replace("*", "").strip()[:60], answer))
                 else:
                     # Revert whatever state we left and hand it to the human.
                     await page.keyboard.press("Escape")
@@ -413,12 +405,14 @@ class GreenhouseAdapter(SubmissionAdapter):
 
     # ------------------------------------------------------------------
 
-    async def _fill(self, page, selector: str, value: str) -> None:
+    async def _fill(self, page, selector: str, value: str) -> bool:
         if not value:
-            return
+            return False
         loc = page.locator(selector).first
-        if await loc.count() > 0:
-            await loc.fill(value)
+        if await loc.count() == 0:
+            return False
+        await loc.fill(value)
+        return True
 
     async def _unmapped_required(self, page) -> list[str]:
         # Combobox inner inputs stay value-less even when an option is
@@ -439,33 +433,3 @@ class GreenhouseAdapter(SubmissionAdapter):
                             || el.placeholder || 'unknown').trim().slice(0, 60);
                 })
         """)
-
-    async def _fetch_resume(self, uid: str, display_name: str) -> str | None:
-        """Download the resume; attach it under a recruiter-friendly filename."""
-        if not BUCKET:
-            return None
-        try:
-            from google.cloud import storage
-            blob = storage.Client().bucket(BUCKET).blob(f"users/{uid}/resume.pdf")
-            if not blob.exists():
-                return None
-            nice = re.sub(r"[^A-Za-z0-9]+", "_", display_name).strip("_") or "Candidate"
-            path = os.path.join(tempfile.mkdtemp(), f"{nice}_Resume.pdf")
-            blob.download_to_filename(path)
-            return path
-        except Exception:
-            log.exception("resume fetch failed for uid=%s", uid)
-            return None
-
-    async def _shot(self, page, uid: str, app_id: str, label: str) -> str:
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
-        storage_path = f"users/{uid}/screenshots/{app_id}/{ts}_{label}.png"
-        png = await page.screenshot(full_page=True)
-        if BUCKET:
-            try:
-                from google.cloud import storage
-                storage.Client().bucket(BUCKET).blob(storage_path).upload_from_string(
-                    png, content_type="image/png")
-            except Exception:
-                log.exception("screenshot upload failed")
-        return storage_path
