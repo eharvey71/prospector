@@ -21,14 +21,18 @@ log = logging.getLogger("drafting")
 DRAFT_SYSTEM = """You write cover letters that sound like the candidate, not \
 like an AI. You are given the candidate's real writing samples: match their \
 sentence rhythm, vocabulary level, and directness. Hard rules: never claim \
-experience not present in the work history; no "I am excited to apply"; no \
-"passionate"; no restating the job description back at the company; 250-350 \
-words; specific over general in every sentence."""
+experience not present in the stated facts (work history, education, \
+projects); no "I am excited to apply"; no "passionate"; no restating the job \
+description back at the company; 250-350 words; specific over general in \
+every sentence. For an early-career candidate, education and projects ARE \
+the story — write them with the same concreteness a veteran's work history \
+would get, and never apologize for a short history."""
 
 CRITIQUE_SYSTEM = """You are a skeptical hiring manager reviewing a cover \
-letter against the candidate's actual work history. Flag: (1) any claim not \
-supported by the history — quote it; (2) generic AI-sounding phrases; (3) \
-factual mismatches with the job posting. If the letter is clean, say so."""
+letter against the candidate's actual work history, education, and \
+projects. Flag: (1) any claim not supported by those facts — quote it; (2) \
+generic AI-sounding phrases; (3) factual mismatches with the job posting. \
+If the letter is clean, say so."""
 
 
 class Critique(BaseModel):
@@ -36,6 +40,28 @@ class Critique(BaseModel):
     unsupported_claims: list[str] = Field(default_factory=list)
     generic_phrases: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
+
+
+def _facts_block(profile: UserProfile) -> str:
+    """Work history + education + projects — the complete set of facts a
+    letter or answer is allowed to claim."""
+    history = "\n".join(
+        f"- {w.title} at {w.company} ({w.start} to {w.end or 'present'}): "
+        + "; ".join(w.bullets)
+        for w in profile.work_history
+    )
+    education = "\n".join(
+        f"- {e.degree}, {e.school}" + (f" ({e.year})" if e.year else "")
+        + (": " + "; ".join(e.bullets) if e.bullets else "")
+        for e in profile.education
+    )
+    projects = "\n".join(
+        f"- {p.name} [{', '.join(p.tech)}]: {p.description}"
+        for p in profile.projects
+    )
+    return (f"Work history:\n{history or '(none)'}\n"
+            f"Education:\n{education or '(none listed)'}\n"
+            f"Projects:\n{projects or '(none listed)'}")
 
 
 def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
@@ -141,11 +167,6 @@ def suggest_escalation_answers(db: firestore.Client, uid: str, app_id: str) -> N
     posting = (db.collection("jobPostings")
                .document(app_data.get("posting_id", "")).get().to_dict() or {})
     tri = (lambda v: "not stated" if v is None else ("Yes" if v else "No"))
-    history = "\n".join(
-        f"- {w.title} at {w.company} ({w.start} to {w.end or 'present'}): "
-        + "; ".join(w.bullets)
-        for w in profile.work_history
-    )
     questions = "\n".join(f"- {e.get('field')}" for e in needs)
 
     result = generate_structured(
@@ -156,8 +177,7 @@ Salary target: {profile.salary_target or "not stated"}.
 Open to relocation: {tri(profile.screeners.open_to_relocation)}.
 Willing to work in-person/onsite/hybrid: {tri(profile.screeners.onsite_ok)}.
 Skills: {", ".join(profile.skills)}.
-Work history:
-{history}
+{_facts_block(profile)}
 
 JOB: {posting.get("title")} at {posting.get("company")}
 
@@ -192,17 +212,12 @@ def _draft_prompt(profile: UserProfile, posting: dict, app_data: dict) -> str:
     samples = "\n\n---\n\n".join(
         f"[{s.title}]\n{s.text[:2000]}" for s in profile.writing_samples[:3]
     ) or "(no samples provided — use a plain, direct, professional voice)"
-    history = "\n".join(
-        f"- {w.title} at {w.company} ({w.start} to {w.end or 'present'}): "
-        + "; ".join(w.bullets)
-        for w in profile.work_history
-    )
     reasons = "; ".join((app_data.get("match") or {}).get("reasons", []))
     return f"""CANDIDATE WRITING SAMPLES (match this voice):
 {samples}
 
-WORK HISTORY (the only facts you may use):
-{history}
+CANDIDATE FACTS (the only facts you may use — career stage: {profile.career_stage}):
+{_facts_block(profile)}
 
 Skills: {", ".join(profile.skills)}
 
@@ -216,12 +231,8 @@ Write the cover letter body only — no address block, no date, no
 
 
 def _critique_prompt(profile: UserProfile, posting: dict, letter: str) -> str:
-    history = "\n".join(
-        f"- {w.title} at {w.company}: " + "; ".join(w.bullets)
-        for w in profile.work_history
-    )
-    return f"""WORK HISTORY (ground truth):
-{history}
+    return f"""CANDIDATE FACTS (ground truth):
+{_facts_block(profile)}
 
 JOB: {posting.get("title")} at {posting.get("company")}
 
@@ -246,19 +257,13 @@ LETTER:
 def _answers_prompt(profile: UserProfile, posting: dict) -> str:
     tri = (lambda v: "not stated"
            if v is None else ("Yes" if v else "No"))
-    history = "\n".join(
-        f"- {w.title} at {w.company} ({w.start} to {w.end or 'present'}): "
-        + "; ".join(w.bullets)
-        for w in profile.work_history
-    )
     return f"""Candidate: {profile.name}, {profile.location or "location unspecified"}.
 Work authorization: {profile.work_auth or "not stated — leave work_auth null"}.
 Salary target: {profile.salary_target or "not stated — leave salary null"}.
 Open to relocation: {tri(profile.screeners.open_to_relocation)}.
 Willing to work in-person/onsite/hybrid: {tri(profile.screeners.onsite_ok)}.
 Skills: {", ".join(profile.skills)}.
-Work history:
-{history}
+{_facts_block(profile)}
 
 Job: {posting.get("title")} at {posting.get("company")}.
 Description excerpt: {(posting.get("descriptionText") or "")[:4000]}

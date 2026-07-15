@@ -16,6 +16,8 @@ import { T, Nav, box, btn, btnPrimary, input, label } from "../ui";
 
 const EMPTY_ROLE = { company: "", title: "", start: "", end: "", bullets: [""] };
 const EMPTY_SAMPLE = { title: "", text: "" };
+const EMPTY_EDU = { school: "", degree: "", year: "", bullets: [""] };
+const EMPTY_PROJECT = { name: "", description: "", tech: "" }; // tech: csv in UI
 
 export default function ProfilePage() {
   const [user, setUser] = useState(null);
@@ -35,6 +37,9 @@ export default function ProfilePage() {
   const [skills, setSkills] = useState("");           // comma-separated in UI
   const [history, setHistory] = useState([]);
   const [samples, setSamples] = useState([]);
+  const [careerStage, setCareerStage] = useState("experienced");
+  const [education, setEducation] = useState([]);
+  const [projects, setProjects] = useState([]);
   // Standard screeners: "" = not set (question escalates), "yes"/"no"
   const [relocation, setRelocation] = useState("");
   const [onsite, setOnsite] = useState("");
@@ -75,6 +80,15 @@ export default function ProfilePage() {
         setSamples((d.writing_samples || []).map(s => ({
           title: s.title || "", text: s.text || "",
         })));
+        setCareerStage(d.career_stage || "experienced");
+        setEducation((d.education || []).map(e => ({
+          school: e.school || "", degree: e.degree || "", year: e.year || "",
+          bullets: Array.isArray(e.bullets) && e.bullets.length ? e.bullets : [""],
+        })));
+        setProjects((d.projects || []).map(p => ({
+          name: p.name || "", description: p.description || "",
+          tech: (p.tech || []).join(", "),
+        })));
         const tri = (v) => (v === true ? "yes" : v === false ? "no" : "");
         setRelocation(tri(d.screeners?.open_to_relocation));
         setOnsite(tri(d.screeners?.onsite_ok));
@@ -110,6 +124,16 @@ export default function ProfilePage() {
         bullets: (r.bullets || []).filter(Boolean),
       })),
       writing_samples: samples.filter(s => s.title || s.text),
+      career_stage: careerStage,
+      education: education
+        .filter(e => e.school || e.degree)
+        .map(e => ({
+          school: e.school, degree: e.degree, year: e.year || null,
+          bullets: (e.bullets || []).filter(Boolean),
+        })),
+      projects: projects
+        .filter(p => p.name || p.description)
+        .map(p => ({ name: p.name, description: p.description, tech: csv(p.tech) })),
       screeners: {
         open_to_relocation: relocation === "" ? null : relocation === "yes",
         onsite_ok: onsite === "" ? null : onsite === "yes",
@@ -163,6 +187,10 @@ export default function ProfilePage() {
     setHistory(h => h.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   const setSample = (i, patch) =>
     setSamples(s => s.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const setEdu = (i, patch) =>
+    setEducation(e => e.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const setProject = (i, patch) =>
+    setProjects(p => p.map((x, j) => (j === i ? { ...x, ...patch } : x)));
 
   if (!user) {
     return (
@@ -187,6 +215,19 @@ export default function ProfilePage() {
 
       <section style={box}>
         <h2>Basics</h2>
+        <span style={label}>Where are you in your career?</span>
+        <select style={input} value={careerStage} onChange={e => setCareerStage(e.target.value)}>
+          <option value="entry">Just starting out — score me on education, projects &amp; potential</option>
+          <option value="some">A few years of experience</option>
+          <option value="experienced">Experienced — score me on my work history</option>
+        </select>
+        {careerStage === "entry" && (
+          <p style={{ color: T.muted, fontSize: 13, marginTop: -6 }}>
+            Matching will weigh your Education and Projects sections like work
+            history, skip senior-level postings, and only treat explicit hard
+            requirements (like &quot;5+ years required&quot;) as blockers.
+          </p>
+        )}
         <span style={label}>Name</span>
         <input style={input} value={name} onChange={e => setName(e.target.value)} />
         <span style={label}>Email (goes on applications)</span>
@@ -198,7 +239,7 @@ export default function ProfilePage() {
                onChange={e => setLinkedin(e.target.value)} />
         <span style={label}>Website / portfolio (optional)</span>
         <input style={input} value={website} onChange={e => setWebsite(e.target.value)} />
-        <span style={label}>Location (City, ST — e.g. Richmond, VA)</span>
+        <span style={label}>Location (City, ST — e.g. Denver, CO)</span>
         <input style={input} value={location} onChange={e => setLocation(e.target.value)} />
         <span style={label}>Work authorization</span>
         <input style={input} value={workAuth} onChange={e => setWorkAuth(e.target.value)} />
@@ -292,6 +333,70 @@ export default function ProfilePage() {
         ))}
         <button style={btn} onClick={() => setHistory(h => [...h, { ...EMPTY_ROLE }])}>
           + Add role
+        </button>
+      </section>
+
+      <section style={box}>
+        <h2>Education</h2>
+        <p style={{ color: T.muted, fontSize: 13 }}>
+          Degrees, bootcamps, certifications. For early-career matching this
+          carries the weight work history carries for veterans.
+        </p>
+        {education.map((e, i) => (
+          <div key={i} style={{ ...box, background: T.panelAlt }}>
+            <span style={label}>School / program</span>
+            <input style={input} value={e.school} onChange={ev => setEdu(i, { school: ev.target.value })} />
+            <div style={{ display: "flex", gap: 12 }}>
+              <div style={{ flex: 2 }}>
+                <span style={label}>Degree / credential (e.g. BS Biology)</span>
+                <input style={input} value={e.degree} onChange={ev => setEdu(i, { degree: ev.target.value })} />
+              </div>
+              <div style={{ flex: 1 }}>
+                <span style={label}>Year (or expected)</span>
+                <input style={input} value={e.year} onChange={ev => setEdu(i, { year: ev.target.value })} />
+              </div>
+            </div>
+            <span style={label}>Highlights (one per line — coursework, honors, GPA, activities)</span>
+            <textarea
+              style={{ ...input, height: 90 }}
+              value={(e.bullets || []).join("\n")}
+              onChange={ev => setEdu(i, { bullets: ev.target.value.split("\n") })}
+            />
+            <button style={btn} onClick={() => setEducation(x => x.filter((_, j) => j !== i))}>
+              Remove
+            </button>
+          </div>
+        ))}
+        <button style={btn} onClick={() => setEducation(x => [...x, { ...EMPTY_EDU }])}>
+          + Add education
+        </button>
+      </section>
+
+      <section style={box}>
+        <h2>Projects</h2>
+        <p style={{ color: T.muted, fontSize: 13 }}>
+          School, personal, volunteer, or open-source work — anything you
+          built or ran. Letters and matching can use these as facts.
+        </p>
+        {projects.map((p, i) => (
+          <div key={i} style={{ ...box, background: T.panelAlt }}>
+            <span style={label}>Project name</span>
+            <input style={input} value={p.name} onChange={ev => setProject(i, { name: ev.target.value })} />
+            <span style={label}>What you built / did, and the outcome</span>
+            <textarea
+              style={{ ...input, height: 90 }}
+              value={p.description}
+              onChange={ev => setProject(i, { description: ev.target.value })}
+            />
+            <span style={label}>Tools / skills used (comma-separated)</span>
+            <input style={input} value={p.tech} onChange={ev => setProject(i, { tech: ev.target.value })} />
+            <button style={btn} onClick={() => setProjects(x => x.filter((_, j) => j !== i))}>
+              Remove
+            </button>
+          </div>
+        ))}
+        <button style={btn} onClick={() => setProjects(x => [...x, { ...EMPTY_PROJECT }])}>
+          + Add project
         </button>
       </section>
 

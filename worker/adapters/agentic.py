@@ -278,6 +278,11 @@ class AgenticAdapter(SubmissionAdapter):
             f"({w.get('start')} to {w.get('end') or 'present'})"
             for w in (profile.get("work_history") or prof.get("work_history") or [])
         )
+        education = "\n".join(
+            f"- {e.get('degree')}, {e.get('school')}"
+            + (f" ({e.get('year')})" if e.get("year") else "")
+            for e in (profile.get("education") or prof.get("education") or [])
+        )
         facts = f"""CANDIDATE FACTS (the only permitted sources):
 Name: {profile.get('name') or prof.get('name') or ''}
 Email: {profile.get('email') or prof.get('email') or ''}
@@ -289,6 +294,8 @@ Open to relocation: {tri(screeners.get('open_to_relocation'))}
 Willing to work in-person/onsite/hybrid: {tri(screeners.get('onsite_ok'))}
 Work history:
 {history}
+Education:
+{education or "(none listed)"}
 
 PRE-APPROVED SCREENING ANSWERS:
 Why this company: {answers.get('why_company') or ''}

@@ -72,6 +72,22 @@ class WorkHistoryItem(BaseModel):
     bullets: list[str] = Field(default_factory=list)
 
 
+class EducationItem(BaseModel):
+    school: str
+    degree: str                     # "BS Computer Science"
+    year: Optional[str] = None      # graduation year (or expected)
+    bullets: list[str] = Field(default_factory=list)  # coursework, honors,
+                                                      # activities, GPA
+
+
+class ProjectItem(BaseModel):
+    """Personal/school/open-source projects — for early-career candidates
+    these carry the weight work history carries for experienced ones."""
+    name: str
+    description: str                # what was built, and any outcome
+    tech: list[str] = Field(default_factory=list)
+
+
 class WritingSample(BaseModel):
     title: str
     text: str
@@ -102,10 +118,15 @@ class UserProfile(BaseModel):
     linkedin: Optional[str] = None      # profile URL — asked on most forms
     website: Optional[str] = None       # portfolio/personal site
     location: Optional[str] = None
+    # "entry" (new to the job market: score on education/projects/potential),
+    # "some" (a few years), "experienced" (default; score on work history).
+    career_stage: str = "experienced"
     work_auth: Optional[str] = None
     salary_target: Optional[str] = None
     skills: list[str] = Field(default_factory=list)
     work_history: list[WorkHistoryItem] = Field(default_factory=list)
+    education: list[EducationItem] = Field(default_factory=list)
+    projects: list[ProjectItem] = Field(default_factory=list)
     writing_samples: list[WritingSample] = Field(default_factory=list)
     screeners: ScreenerFacts = Field(default_factory=ScreenerFacts)
     preferences: Preferences = Field(default_factory=Preferences)

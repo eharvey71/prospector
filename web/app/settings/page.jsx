@@ -181,7 +181,7 @@ export default function SettingsPage() {
 
         <h3 style={{ marginTop: 0 }}>Track a company by name</h3>
         <p style={{ color: T.muted, fontSize: 13 }}>
-          Type a company (e.g. Pearson). The engine finds how they run job
+          Type a company (e.g. Acme Corp). The engine finds how they run job
           applications and sets up what it can — no need to know their ATS.
         </p>
         <div style={{ display: "flex", gap: 8 }}>
@@ -236,7 +236,7 @@ export default function SettingsPage() {
         </p>
         <textarea
           style={{ ...input, height: 60 }}
-          placeholder="e.g. solutions engineering roles in ed-tech or AI products, remote-friendly"
+          placeholder="e.g. entry-level marketing coordinator roles at consumer brands, remote-friendly"
           value={suggestRole}
           onChange={e => setSuggestRole(e.target.value)}
         />
