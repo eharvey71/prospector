@@ -8,7 +8,15 @@
   if (!pending || !pending.url) return;
   let targetHost;
   try { targetHost = new URL(pending.url).hostname; } catch { return; }
-  if (location.hostname !== targetHost) return;
+  // Match on the registrable domain, not the exact host — ATSes redirect
+  // between subdomains (boards.greenhouse.io <-> job-boards.greenhouse.io)
+  // and an exact match made the panel vanish after the hop.
+  const tail = (h) => h.split(".").slice(-2).join(".");
+  if (tail(location.hostname) !== tail(targetHost)) {
+    console.log(`[job-engine] autofill payload is for ${targetHost}; this is`
+      + ` ${location.hostname} — panel not shown`);
+    return;
+  }
 
   const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
@@ -126,10 +134,20 @@
 
   const h = document.createElement("div");
   h.innerHTML = `<strong>Job Engine autofill</strong>`;
+  // SPA pages re-render aggressively and can sweep the panel out of the
+  // DOM — re-attach until the user closes or clears it.
+  let keepAlive = null;
+  const dismiss = () => { clearInterval(keepAlive); panel.remove(); };
+  keepAlive = setInterval(() => {
+    if (!document.documentElement.contains(panel)) {
+      (document.body || document.documentElement).append(panel);
+    }
+  }, 800);
+
   const close = document.createElement("button");
   close.textContent = "✕";
   close.style.cssText = `float:right;background:none;border:none;color:${P.muted};cursor:pointer;font-size:14px`;
-  close.onclick = () => panel.remove();
+  close.onclick = dismiss;
   const sub = document.createElement("div");
   sub.textContent = `${pending.title || ""} @ ${pending.company || ""}`;
   sub.style.cssText = `color:${P.muted};margin:2px 0 10px`;
@@ -176,9 +194,9 @@
   clear.style.cssText = `width:100%;margin-top:10px;padding:6px;background:none;
     border:1px solid ${P.border};color:${P.muted};border-radius:6px;cursor:pointer`;
   clear.onclick = () => {
-    chrome.runtime.sendMessage({ kind: "clear" }, () => panel.remove());
+    chrome.runtime.sendMessage({ kind: "clear" }, dismiss);
   };
   panel.append(clear);
 
-  document.documentElement.append(panel);
+  (document.body || document.documentElement).append(panel);
 })();
