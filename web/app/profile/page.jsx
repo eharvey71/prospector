@@ -26,6 +26,9 @@ export default function ProfilePage() {
   // Flat profile fields
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [phone, setPhone] = useState("");
+  const [linkedin, setLinkedin] = useState("");
+  const [website, setWebsite] = useState("");
   const [location, setLocation] = useState("");
   const [workAuth, setWorkAuth] = useState("");
   const [salaryTarget, setSalaryTarget] = useState("");
@@ -57,6 +60,9 @@ export default function ProfilePage() {
         const d = snap.data();
         setName(d.name || "");
         setEmail(d.email || user.email || "");
+        setPhone(d.phone || "");
+        setLinkedin(d.linkedin || "");
+        setWebsite(d.website || "");
         setLocation(d.location || "");
         setWorkAuth(d.work_auth || "");
         setSalaryTarget(d.salary_target || "");
@@ -91,6 +97,9 @@ export default function ProfilePage() {
     const profile = {
       name,
       email,
+      phone: phone || null,
+      linkedin: linkedin || null,
+      website: website || null,
       location: location || null,
       work_auth: workAuth || null,
       salary_target: salaryTarget || null,
@@ -182,7 +191,14 @@ export default function ProfilePage() {
         <input style={input} value={name} onChange={e => setName(e.target.value)} />
         <span style={label}>Email (goes on applications)</span>
         <input style={input} value={email} onChange={e => setEmail(e.target.value)} />
-        <span style={label}>Location</span>
+        <span style={label}>Phone</span>
+        <input style={input} value={phone} onChange={e => setPhone(e.target.value)} />
+        <span style={label}>LinkedIn profile URL</span>
+        <input style={input} value={linkedin} placeholder="https://www.linkedin.com/in/…"
+               onChange={e => setLinkedin(e.target.value)} />
+        <span style={label}>Website / portfolio (optional)</span>
+        <input style={input} value={website} onChange={e => setWebsite(e.target.value)} />
+        <span style={label}>Location (City, ST — e.g. Richmond, VA)</span>
         <input style={input} value={location} onChange={e => setLocation(e.target.value)} />
         <span style={label}>Work authorization</span>
         <input style={input} value={workAuth} onChange={e => setWorkAuth(e.target.value)} />

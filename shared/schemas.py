@@ -98,6 +98,9 @@ class Preferences(BaseModel):
 class UserProfile(BaseModel):
     name: str
     email: str
+    phone: Optional[str] = None
+    linkedin: Optional[str] = None      # profile URL — asked on most forms
+    website: Optional[str] = None       # portfolio/personal site
     location: Optional[str] = None
     work_auth: Optional[str] = None
     salary_target: Optional[str] = None

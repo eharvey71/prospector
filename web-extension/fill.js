@@ -58,6 +58,11 @@
     let count = 0;
     const values = [...(pending.values || [])];
     if (pending.letter) values.push({ field: "cover letter", value: pending.letter });
+    // Suggested answers for the open questions are attempted too — the
+    // human is watching, so a visible best-effort fill beats a copy button.
+    for (const e of pending.needs || []) {
+      if (e.suggestion) values.push({ field: e.field, value: e.suggestion });
+    }
 
     // Known ATS shortcuts first (exact ids/names), then label matching.
     const direct = {
@@ -65,12 +70,16 @@
       "email": "#email, input[name='email'], input[type='email']",
       "phone": "#phone, input[name='phone'], input[type='tel']",
       "full name": "input[name='name']",
+      "linkedin": "input[name*='linkedin' i], input[id*='linkedin' i]",
+      "website": "input[name*='website' i], input[name*='portfolio' i]",
       "location": "input[name='location']",
       "cover letter": "textarea[name*='cover'], #cover_letter_text, textarea[name='comments']",
     };
     for (const { field, value } of values) {
       if (!value || /entered \(full text/.test(value) || field === "Resume") continue;
-      const f = norm(field);
+      // "(could not verify selection)" and similar annotations from the
+      // worker would break label matching — strip parentheticals.
+      const f = norm((field || "").replace(/\(.*?\)/g, ""));
       let el = null;
       for (const [key, sel] of Object.entries(direct)) {
         if (f.includes(key)) { el = document.querySelector(sel); break; }

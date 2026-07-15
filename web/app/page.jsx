@@ -240,10 +240,14 @@ export default function ReviewQueue() {
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
+  const [userDoc, setUserDoc] = useState(null);     // profile facts for autofill
+
   useEffect(() => {
     if (!user) return;
     getDoc(doc(db, "users", user.uid)).then((s) => {
-      const t = s.data()?.preferences?.min_match_score;
+      const d = s.data() || {};
+      setUserDoc(d);
+      const t = d.preferences?.min_match_score;
       if (typeof t === "number") setThreshold(t);
     });
   }, [user]);
@@ -341,6 +345,43 @@ export default function ReviewQueue() {
     }
   }
 
+  // The standard kit: facts nearly every form asks for, straight from the
+  // profile — independent of what any adapter run recorded.
+  const US_STATES = {
+    AL: "Alabama", AK: "Alaska", AZ: "Arizona", AR: "Arkansas", CA: "California",
+    CO: "Colorado", CT: "Connecticut", DE: "Delaware", FL: "Florida", GA: "Georgia",
+    HI: "Hawaii", ID: "Idaho", IL: "Illinois", IN: "Indiana", IA: "Iowa",
+    KS: "Kansas", KY: "Kentucky", LA: "Louisiana", ME: "Maine", MD: "Maryland",
+    MA: "Massachusetts", MI: "Michigan", MN: "Minnesota", MS: "Mississippi",
+    MO: "Missouri", MT: "Montana", NE: "Nebraska", NV: "Nevada", NH: "New Hampshire",
+    NJ: "New Jersey", NM: "New Mexico", NY: "New York", NC: "North Carolina",
+    ND: "North Dakota", OH: "Ohio", OK: "Oklahoma", OR: "Oregon", PA: "Pennsylvania",
+    RI: "Rhode Island", SC: "South Carolina", SD: "South Dakota", TN: "Tennessee",
+    TX: "Texas", UT: "Utah", VT: "Vermont", VA: "Virginia", WA: "Washington",
+    WV: "West Virginia", WI: "Wisconsin", WY: "Wyoming", DC: "District of Columbia",
+  };
+
+  function standardKit(u) {
+    if (!u) return [];
+    const kit = [];
+    const add = (field, value) => value && kit.push({ field, value, status: "filled" });
+    const [first, ...rest] = (u.name || "").split(" ");
+    add("First name", first);
+    add("Last name", rest.join(" "));
+    add("Email", u.email);
+    add("Phone", u.phone);
+    add("LinkedIn Profile", u.linkedin);
+    add("Website", u.website);
+    add("Location (City)", u.location);
+    const m = (u.location || "").match(/^([^,]+),\s*([A-Za-z]{2})\b/);
+    if (m) {
+      add("City", m[1].trim());
+      add("State", US_STATES[m[2].toUpperCase()] || m[2]);
+      add("Country", "United States");
+    }
+    return kit;
+  }
+
   // Hand this application's prepared answers to the autofill extension
   // (web-extension/), then open the posting. The extension acks via
   // postMessage; no ack = not installed.
@@ -349,10 +390,16 @@ export default function ReviewQueue() {
     if (!p?.url) return;
     const sheet = a.submission?.fill_sheet || [];
     const answers = a.screeningAnswers || {};
+    const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    const sheetFilled = sheet.filter((e) => e.status === "filled");
+    const have = new Set(sheetFilled.map((e) => norm(e.field)));
     const payload = {
       url: p.url, title: p.title, company: p.company,
       letter: a.letter?.text || "",
-      values: sheet.filter((e) => e.status === "filled"),
+      values: [
+        ...sheetFilled,
+        ...standardKit(userDoc).filter((e) => !have.has(norm(e.field))),
+      ],
       needs: sheet.filter((e) => e.status !== "filled"),
       answers: [
         ...Object.entries(answers)
