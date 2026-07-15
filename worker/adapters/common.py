@@ -67,6 +67,14 @@ def decide_standard_answer(label: str, location: str, work_auth: str,
         return "No" if us_authorized else None
     if re.search(r"authorized to work|legally.*work", q):
         return "Yes" if us_authorized else None
+    if re.search(r"\bcitizen(ship)?\b", q):
+        # Yes/no citizenship questions only; status dropdowns whose options
+        # don't yes/no-match will fail option matching and escalate safely.
+        if "citizen" in auth:
+            return "Yes"
+        if "green card" in auth or "permanent resident" in auth:
+            return "No"
+        return None
     if re.search(r"\brelocat", q):
         return yes_no(s.get("open_to_relocation"))
     if re.search(r"\bin[\s-]?person\b|\bin[\s-]?office\b|\bon[\s-]?site\b"
