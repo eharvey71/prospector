@@ -236,6 +236,7 @@ export default function ReviewQueue() {
   const [draftingIds, setDraftingIds] = useState([]);
   const [threshold, setThreshold] = useState(70);   // preferences.min_match_score
   const [tab, setTab] = useState("review");
+  const [queryError, setQueryError] = useState(""); // surfaced, never swallowed
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
@@ -250,27 +251,38 @@ export default function ReviewQueue() {
   useEffect(() => {
     if (!user) return;
     const base = collection(db, "users", user.uid, "applications");
+    // Every listener reports errors instead of failing silently — a missing
+    // composite index otherwise just looks like an eternally empty tab.
+    const onErr = (name) => (err) => {
+      console.error(`${name} query failed:`, err);
+      setQueryError(`The "${name}" list failed to load: ${err.message}`);
+    };
     const unsub1 = onSnapshot(
       query(base, where("state", "==", "in_review"), orderBy("match.score", "desc")),
-      (snap) => setApps(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+      (snap) => setApps(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      onErr("Review")
     );
     const unsub2 = onSnapshot(
       query(base, where("state", "==", "needs_human")),
-      (snap) => setEscalated(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+      (snap) => setEscalated(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      onErr("Needs you")
     );
     const unsub3 = onSnapshot(
       query(base, where("state", "==", "matched"), orderBy("match.score", "desc")),
-      (snap) => setMatches(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+      (snap) => setMatches(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      onErr("Matches")
     );
     const unsub4 = onSnapshot(
       query(base, where("state", "in", ["approved", "queued", "submitting"]),
             orderBy("updatedAt", "desc")),
-      (snap) => setInflight(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+      (snap) => setInflight(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      onErr("In flight")
     );
     const unsub5 = onSnapshot(
       query(base, where("state", "in", ["submitted", "failed"]),
             orderBy("updatedAt", "desc"), limit(25)),
-      (snap) => setDone(snap.docs.map((d) => ({ id: d.id, ...d.data() })))
+      (snap) => setDone(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      onErr("Done")
     );
     return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
   }, [user]);
@@ -373,6 +385,20 @@ export default function ReviewQueue() {
   return (
     <main style={{ padding: "24px 40px 40px", maxWidth: 760, margin: "0 auto" }}>
       <Nav active="/" />
+
+      {queryError && (
+        <div style={{
+          ...card, padding: 12, borderColor: T.danger, color: T.danger,
+          fontSize: 14,
+        }}>
+          {queryError}
+          {queryError.toLowerCase().includes("index") && (
+            <div style={{ color: T.muted, marginTop: 4 }}>
+              Usually a missing index — run: firebase deploy --only firestore:indexes
+            </div>
+          )}
+        </div>
+      )}
 
       <section style={{ ...card, padding: 14 }}>
         <div style={{ display: "flex", gap: 8 }}>
