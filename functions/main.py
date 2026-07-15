@@ -129,13 +129,13 @@ def suggest_companies(req: https_fn.CallableRequest) -> dict:
     prefs = profile.get("preferences") or {}
 
     from suggest import suggest_companies as run_suggest
-    return {"companies": run_suggest(
+    return run_suggest(   # {"companies": [...], "unverified": [...]}
         role, exclude,
         location=profile.get("location") or "",
         remote_only=bool(prefs.get("remote_only")),
         titles=prefs.get("titles") or [],
         skills=profile.get("skills") or [],
-    )}
+    )
 
 
 # ---------------------------------------------------------------------------

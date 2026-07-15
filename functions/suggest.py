@@ -36,12 +36,18 @@ HTTP_TIMEOUT = 6.0
 PROBE_THREADS = 8
 
 SUGGEST_SYSTEM = """You suggest employers for a job seeker. Given a role \
-description (and optionally the seeker's target titles and skills), list \
-organizations genuinely likely to hire for it — across every relevant \
-sector: companies, non-profits, NGOs, foundations, healthcare and education \
-organizations, research institutes, government contractors. Mix well-known \
-and less obvious employers; never repeat organizations listed as already \
-tried.
+description, list organizations genuinely likely to hire for it — across \
+every relevant sector: companies, non-profits, NGOs, foundations, \
+healthcare and education organizations, research institutes, government \
+contractors. Mix well-known and less obvious employers; never repeat \
+organizations listed as already tried.
+
+SECTOR FIDELITY: the role description is authoritative. Stay strictly \
+within the kind of organization it describes — if it says "non-profit \
+medical association", suggest medical associations, societies, and health \
+non-profits, NOT tech companies or consultancies that merely employ \
+similar roles. Any seeker background provided is context for seniority \
+and specialty only; never let it override the described sector.
 
 For each organization provide:
 - slugs: up to 4 guesses at their job-board slug (lowercase, no spaces; \
@@ -74,14 +80,22 @@ def _slug_variants(name: str) -> list[str]:
 def suggest_companies(role_description: str, exclude: set[str],
                       location: str = "", remote_only: bool = False,
                       titles: list[str] | None = None,
-                      skills: list[str] | None = None) -> list[dict]:
-    """Returns verified boards: [{company, slug, ats, jobs, sample_titles}].
-    For ats=workday, slug is the full myworkdayjobs URL."""
+                      skills: list[str] | None = None) -> dict:
+    """Returns {"companies": verified, "unverified": [names]}.
+
+    companies: [{company, slug, ats, jobs, sample_titles}] — live boards
+    (for ats=workday, slug is the full myworkdayjobs URL).
+    unverified: organizations the LLM proposed that have no board on a
+    supported ATS — still likely fits; the UI offers Track (the full
+    resolver, which handles careers-page fingerprinting) for each."""
     situation = ""
+    if titles or skills:
+        situation += ("\nSeeker background (context only — the role "
+                      "description above wins on any conflict):")
     if titles:
-        situation += f"\nSeeker's target titles: {', '.join(titles[:6])}"
+        situation += f"\n  target titles: {', '.join(titles[:6])}"
     if skills:
-        situation += f"\nSeeker's skills: {', '.join(skills[:12])}"
+        situation += f"\n  skills: {', '.join(skills[:12])}"
     if location:
         situation += f"\nCandidate location: {location}"
     if remote_only:
@@ -91,6 +105,7 @@ def suggest_companies(role_description: str, exclude: set[str],
                       "candidate or strong remote cultures.")
 
     verified: list[dict] = []
+    unverified: list[str] = []     # proposed, sector-relevant, but no board found
     tried: list[str] = []          # company names already proposed (any outcome)
     seen_boards: set[str] = {s.lower() for s in exclude}
 
@@ -116,14 +131,16 @@ def suggest_companies(role_description: str, exclude: set[str],
             with ThreadPoolExecutor(max_workers=PROBE_THREADS) as pool:
                 results = list(pool.map(
                     lambda c: _verify_candidate(client, c, seen_boards), fresh))
-            for hit in results:
+            for cand, hit in zip(fresh, results):
                 if hit and hit["slug"].lower() not in seen_boards:
                     seen_boards.add(hit["slug"].lower())
                     verified.append(hit)
+                elif hit is None:
+                    unverified.append(cand.company)
             log.info("suggester round %d: %d proposed, %d verified so far",
                      round_no + 1, len(fresh), len(verified))
 
-    return verified
+    return {"companies": verified, "unverified": unverified[:12]}
 
 
 def _verify_candidate(client: httpx.Client, cand: CompanyCandidate,

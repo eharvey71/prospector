@@ -30,6 +30,7 @@ export default function SettingsPage() {
   const [suggestRole, setSuggestRole] = useState("");
   const [suggesting, setSuggesting] = useState(false);
   const [suggestions, setSuggestions] = useState([]); // verified boards
+  const [unverified, setUnverified] = useState([]);   // fits, but no board found
   const [trackName, setTrackName] = useState("");
   const [tracking, setTracking] = useState(false);
   const [trackResults, setTrackResults] = useState([]); // resolution reports
@@ -86,12 +87,14 @@ export default function SettingsPage() {
     setTimeout(() => setStatus(""), 2500);
   }
 
-  async function trackCompany() {
-    if (!trackName.trim()) return;
+  async function trackCompany(nameArg) {
+    const name = (nameArg ?? trackName).trim();
+    if (!name) return;
     setTracking(true);
     try {
       const call = httpsCallable(functions, "track_company", { timeout: 120_000 });
-      const res = await call({ name: trackName.trim() });
+      const res = await call({ name });
+      setUnverified(list => list.filter(x => x !== nameArg));
       setTrackResults(prev => [res.data, ...prev]);
       // Reflect the new watchlist entry in the fields below.
       const wl = await getDoc(doc(db, "users", user.uid, "watchlist", "companies"));
@@ -113,11 +116,13 @@ export default function SettingsPage() {
     if (!suggestRole.trim()) return;
     setSuggesting(true);
     setSuggestions([]);
+    setUnverified([]);
     try {
       const call = httpsCallable(functions, "suggest_companies", { timeout: 300_000 });
       const res = await call({ role: suggestRole });
       const found = res.data?.companies || [];
       setSuggestions(found);
+      setUnverified(res.data?.unverified || []);
       if (found.length === 0) setStatus("No verified boards found — try rewording the role");
     } catch (e) {
       setStatus(`Suggestion failed: ${e.message}`);
@@ -290,6 +295,28 @@ export default function SettingsPage() {
             <button style={btn} onClick={() => addSuggestion(s)}>Add</button>
           </div>
         ))}
+        {unverified.length > 0 && (
+          <>
+            <p style={{ color: T.muted, fontSize: 13, marginTop: 16, marginBottom: 4 }}>
+              Also likely fits, but no supported job board was found
+              automatically. Track resolves each one properly (careers-page
+              detection included):
+            </p>
+            {unverified.map((name) => (
+              <div key={name} style={{
+                display: "flex", alignItems: "center", gap: 12,
+                background: T.panelAlt, border: `1px solid ${T.border}`,
+                borderRadius: 6, padding: "6px 12px", marginTop: 6,
+              }}>
+                <strong style={{ flex: 1 }}>{name}</strong>
+                <button style={btn} disabled={tracking}
+                        onClick={() => trackCompany(name)}>
+                  {tracking ? "…" : "Track"}
+                </button>
+              </div>
+            ))}
+          </>
+        )}
       </section>
 
       <div style={{ position: "sticky", bottom: 0, background: "#15171c", padding: "12px 0" }}>
