@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Job Engine Autofill",
+  "version": "0.1.0",
+  "description": "Fills job application forms with your prepared answers from Job Engine. Data comes from your own review queue; nothing is submitted automatically.",
+  "permissions": ["storage"],
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://job-engine-c8f9c.web.app/*", "http://localhost:3000/*"],
+      "js": ["bridge.js"]
+    },
+    {
+      "matches": ["<all_urls>"],
+      "js": ["fill.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

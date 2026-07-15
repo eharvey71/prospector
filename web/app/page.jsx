@@ -341,6 +341,45 @@ export default function ReviewQueue() {
     }
   }
 
+  // Hand this application's prepared answers to the autofill extension
+  // (web-extension/), then open the posting. The extension acks via
+  // postMessage; no ack = not installed.
+  function openWithAutofill(a) {
+    const p = postings[a.posting_id];
+    if (!p?.url) return;
+    const sheet = a.submission?.fill_sheet || [];
+    const answers = a.screeningAnswers || {};
+    const payload = {
+      url: p.url, title: p.title, company: p.company,
+      letter: a.letter?.text || "",
+      values: sheet.filter((e) => e.status === "filled"),
+      needs: sheet.filter((e) => e.status !== "filled"),
+      answers: [
+        ...Object.entries(answers)
+          .filter(([k, v]) => k !== "extra" && v)
+          .map(([k, v]) => ({ field: ANSWER_LABELS[k] || k, value: v })),
+        ...Object.entries(answers.extra || {})
+          .map(([k, v]) => ({ field: k, value: v })),
+      ],
+    };
+    let acked = false;
+    const onAck = (ev) => {
+      if (ev.data?.type === "JOB_ENGINE_AUTOFILL_ACK") acked = true;
+    };
+    window.addEventListener("message", onAck);
+    window.postMessage({ type: "JOB_ENGINE_AUTOFILL", payload }, "*");
+    setTimeout(() => {
+      window.removeEventListener("message", onAck);
+      if (acked) {
+        window.open(p.url, "_blank");
+      } else {
+        setAddStatus("Autofill extension not detected — install it once from "
+          + "the repo's web-extension folder (see its README), or use the "
+          + "plain 'Open the job posting' link and the answers on this card.");
+      }
+    }, 600);
+  }
+
   async function transition(appId, to, note) {
     const ref = doc(db, "users", user.uid, "applications", appId);
     await updateDoc(ref, {
@@ -485,11 +524,15 @@ export default function ReviewQueue() {
               <h2 style={{ margin: "0 0 4px" }}>{jobLine(a)}</h2>
               <p><strong style={{ color: T.warn }}>Why:</strong> {a.submission?.error || "escalated"}</p>
               {postings[a.posting_id]?.url && (
-                <a href={postings[a.posting_id].url} target="_blank" rel="noreferrer"
-                   style={{ ...btnPrimary, display: "inline-block",
-                            textDecoration: "none", marginBottom: 12 }}>
-                  Open the job posting ↗
-                </a>
+                <div style={{ marginBottom: 12 }}>
+                  <button style={btnPrimary} onClick={() => openWithAutofill(a)}>
+                    Open &amp; autofill ↗
+                  </button>{" "}
+                  <a href={postings[a.posting_id].url} target="_blank" rel="noreferrer"
+                     style={{ ...btn, display: "inline-block", textDecoration: "none" }}>
+                    Open plain
+                  </a>
+                </div>
               )}
               <FillSheet sheet={a.submission?.fill_sheet} />
               <ScreenshotLinks paths={a.submission?.screenshots} />
