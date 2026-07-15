@@ -21,6 +21,7 @@ export default function SettingsPage() {
   const [excludeCompanies, setExcludeCompanies] = useState("");
   const [minScore, setMinScore] = useState(70);
   const [autoDraft, setAutoDraft] = useState(true);
+  const [salaryStrategy, setSalaryStrategy] = useState("exact");
   const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
   const [leverBoards, setLeverBoards] = useState("");
   const [customPages, setCustomPages] = useState(""); // career page URLs
@@ -45,6 +46,7 @@ export default function SettingsPage() {
         setExcludeCompanies((p.exclude_companies || []).join(", "));
         setMinScore(p.min_match_score ?? 70);
         setAutoDraft(p.auto_draft ?? true);
+        setSalaryStrategy(p.salary_strategy || "exact");
       }
       const wl = await getDoc(doc(db, "users", user.uid, "watchlist", "companies"));
       if (wl.exists()) {
@@ -67,6 +69,7 @@ export default function SettingsPage() {
         exclude_companies: csv(excludeCompanies),
         min_match_score: Number(minScore) || 70,
         auto_draft: autoDraft,
+        salary_strategy: salaryStrategy,
       },
       updatedAt: serverTimestamp(),
     }, { merge: true });
@@ -163,6 +166,18 @@ export default function SettingsPage() {
           Every crawled posting scoring at or above this becomes a match.
           With auto-draft ON, each match immediately gets a cover letter
           written (several LLM calls each) — lower this carefully.
+        </p>
+        <span style={label}>When a form asks for salary expectations</span>
+        <select style={input} value={salaryStrategy}
+                onChange={e => setSalaryStrategy(e.target.value)}>
+          <option value="exact">State my target exactly</option>
+          <option value="range">Give a range around my target</option>
+          <option value="negotiable">Say it&apos;s negotiable — no number</option>
+        </select>
+        <p style={{ color: T.muted, fontSize: 13, marginTop: -6 }}>
+          A number above the company&apos;s budget can auto-reject you before a
+          human ever looks. A range or &quot;negotiable&quot; keeps you in play;
+          your target itself is set on the Profile page.
         </p>
         <label style={{ display: "block", marginBottom: 8 }}>
           <input type="checkbox" checked={autoDraft}

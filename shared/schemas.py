@@ -109,6 +109,10 @@ class Preferences(BaseModel):
     min_match_score: int = 70       # 0-100 gate before drafting
     auto_draft: bool = True         # False: matches wait for a manual
                                     # "write the letter" per application
+    # Salary questions are knockout traps: a number above the band can
+    # auto-reject. "exact" states the target; "range" wraps it in a range;
+    # "negotiable" gives no number.
+    salary_strategy: str = "exact"
 
 
 class UserProfile(BaseModel):
