@@ -57,18 +57,36 @@ class JobLinkPick(BaseModel):
 
 
 def run_discovery(db: firestore.Client) -> int:
-    """Full crawl. Returns number of postings upserted."""
+    """Full crawl. Returns number of postings upserted.
+
+    Every source is isolated: one broken board, dead career page, or LLM
+    outage (career-page link classification is the only LLM dependency
+    here) must never take down the rest of the crawl."""
     boards = _collect_watchlists(db)
     count = 0
+
+    def safe(fn, *args, label: str) -> int:
+        try:
+            return fn(*args)
+        except Exception:
+            log.exception("discovery source %s failed; continuing", label)
+            return 0
+
     with httpx.Client(timeout=HTTP_TIMEOUT, headers={"User-Agent": "job-engine/0.1"}) as client:
         for board in sorted(boards.get("greenhouse", set())):
-            count += _upsert_all(db, _fetch_greenhouse(client, board))
+            count += safe(lambda b=board: _upsert_all(db, _fetch_greenhouse(client, b)),
+                          label=f"greenhouse:{board}")
         for board in sorted(boards.get("lever", set())):
-            count += _upsert_all(db, _fetch_lever(client, board))
-        for page_url in sorted(boards.get("custom", set())):
-            count += _crawl_career_page(db, client, page_url)
+            count += safe(lambda b=board: _upsert_all(db, _fetch_lever(client, b)),
+                          label=f"lever:{board}")
         for wd_url in sorted(boards.get("workday", set())):
-            count += _upsert_all(db, _fetch_workday(client, wd_url))
+            count += safe(lambda u=wd_url: _upsert_all(db, _fetch_workday(client, u)),
+                          label=f"workday:{wd_url}")
+        # Career pages last — they're the only LLM-dependent source, so an
+        # API outage degrades to "no career-page postings this crawl".
+        for page_url in sorted(boards.get("custom", set())):
+            count += safe(lambda p=page_url: _crawl_career_page(db, client, p),
+                          label=f"custom:{page_url}")
     log.info("discovery complete: %d postings upserted", count)
     return count
 
