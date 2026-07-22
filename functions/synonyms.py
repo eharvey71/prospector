@@ -19,14 +19,23 @@ from llm import generate_structured
 
 log = logging.getLogger("synonyms")
 
-MAX_SYNONYMS = 40
+MAX_SYNONYMS = 25
 
 SYSTEM = """You expand a job seeker's target titles into the OTHER titles \
-employers use for the same or closely adjacent work — across sectors and \
-seniority phrasings (e.g. "grant writer" -> "development director", \
-"advancement officer", "philanthropy officer", "grants manager", \
-"development coordinator"). Short title phrases only, lowercase, no \
-duplicates of the originals, no titles for genuinely different work."""
+employers use for the SAME JOB FUNCTION (e.g. "grant writer" -> \
+"development director", "advancement officer", "grants manager"). Hard \
+rules: stay within the same function — a fundraising title never expands \
+into general leadership, education, or program titles; every synonym must \
+contain a function-specific word, never a bare seniority word ("director", \
+"manager", "coordinator" alone are forbidden); prefer precision over \
+breadth — a missing synonym is better than one that drags in unrelated \
+jobs. Short lowercase title phrases only, no duplicates of the originals."""
+
+# Bare seniority/level words: worthless alone as a match key (they'd match
+# "Director of Anything") and a sign the LLM drifted from function to level.
+GENERIC_WORDS = {"director", "manager", "coordinator", "specialist", "lead",
+                 "officer", "analyst", "associate", "assistant", "head",
+                 "vp", "vice", "president", "chief", "senior", "junior"}
 
 
 class TitleSynonyms(BaseModel):
@@ -61,9 +70,15 @@ def maybe_expand_titles(db: firestore.Client, uid: str, user_data: dict) -> None
     synonyms = []
     for s in result.synonyms:
         s = s.strip().lower()
-        if s and s not in seen:
-            seen.add(s)
-            synonyms.append(s)
+        words = s.split()
+        if not s or s in seen:
+            continue
+        # Reject anything made entirely of bare seniority words — it would
+        # match "Director of Anything" and drown the user in wrong hits.
+        if all(w in GENERIC_WORDS or w in ("of", "the", "and") for w in words):
+            continue
+        seen.add(s)
+        synonyms.append(s)
 
     db.collection("users").document(uid).update({
         "preferences.title_synonyms": synonyms[:MAX_SYNONYMS],

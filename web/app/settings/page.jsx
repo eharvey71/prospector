@@ -17,6 +17,7 @@ export default function SettingsPage() {
   const [status, setStatus] = useState("");
 
   const [titles, setTitles] = useState("");           // comma-separated
+  const [titleSynonyms, setTitleSynonyms] = useState(""); // auto-generated, editable
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [excludeCompanies, setExcludeCompanies] = useState("");
   const [minScore, setMinScore] = useState(70);
@@ -47,6 +48,7 @@ export default function SettingsPage() {
       if (snap.exists()) {
         const p = snap.data().preferences || {};
         setTitles((p.titles || []).join(", "));
+        setTitleSynonyms((p.title_synonyms || []).join(", "));
         setRemoteOnly(!!p.remote_only);
         setExcludeCompanies((p.exclude_companies || []).join(", "));
         setMinScore(p.min_match_score ?? 70);
@@ -74,6 +76,7 @@ export default function SettingsPage() {
     await setDoc(doc(db, "users", user.uid), {
       preferences: {
         titles: csv(titles),
+        title_synonyms: csv(titleSynonyms),
         remote_only: remoteOnly,
         exclude_companies: csv(excludeCompanies),
         min_match_score: Number(minScore) || 70,
@@ -179,6 +182,13 @@ export default function SettingsPage() {
         <h2>Matching</h2>
         <span style={label}>Target titles (comma-separated)</span>
         <input style={input} value={titles} onChange={e => setTitles(e.target.value)} />
+        <span style={label}>
+          Title synonyms — auto-generated when your titles change; prune
+          freely, anything here widens what counts as a title match
+        </span>
+        <textarea style={{ ...input, height: 70 }} value={titleSynonyms}
+                  onChange={e => setTitleSynonyms(e.target.value)}
+                  placeholder="(generated about a minute after you save new titles)" />
         <span style={label}>Exclude companies (comma-separated)</span>
         <input style={input} value={excludeCompanies} onChange={e => setExcludeCompanies(e.target.value)} />
         <span style={label}>Minimum match score (0-100)</span>

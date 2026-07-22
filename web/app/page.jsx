@@ -79,6 +79,14 @@ export function MatchInsight({ app, threshold, queue }) {
         }}>
           {score} · {tier.label}
         </span>
+        {m.posting_salary && (
+          <span style={{
+            padding: "2px 10px", borderRadius: 999, fontSize: 13,
+            border: `1px solid ${T.border}`, color: T.ok,
+          }} title="Salary as stated in the posting">
+            {m.posting_salary}
+          </span>
+        )}
         <span style={{ color: T.muted, fontSize: 13 }}>{whyHere}</span>
       </div>
 

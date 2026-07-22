@@ -199,8 +199,33 @@ class RedFlag(BaseModel):
     )
 
 
+class RubricDimension(BaseModel):
+    rating: int = Field(ge=0, le=10, description="0 = no fit at all, 10 = ideal")
+    why: str = Field(default="", description="one short sentence of evidence")
+
+
+class MatchRubric(BaseModel):
+    """Sub-scores the LLM emits; CODE computes the 0-100 score from these.
+    (Asked for a bare 0-100, LLMs collapse onto favorite numerals — nearly
+    every score ended in 2 — so the model never writes the final number.)"""
+    skills: RubricDimension = Field(
+        description="overlap between the candidate's skills/experience and "
+                    "what the posting actually requires")
+    seniority: RubricDimension = Field(
+        description="level match: would they be hired at this level — "
+                    "neither underqualified nor wildly overqualified")
+    domain: RubricDimension = Field(
+        description="sector/industry familiarity the posting cares about")
+    logistics: RubricDimension = Field(
+        description="location/remote/authorization practicality")
+
+
 class MatchResult(BaseModel):
     score: int = Field(ge=0, le=100)
+    # dimension -> 0-10 rating, kept for display/debugging ("domain 2/10")
+    rubric: dict[str, int] = Field(default_factory=dict)
+    # Salary/compensation stated IN the posting, verbatim (None = not stated)
+    posting_salary: Optional[str] = None
     summary: str = Field(
         default="",
         description=(

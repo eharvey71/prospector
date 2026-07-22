@@ -14,39 +14,75 @@ from datetime import datetime, timezone
 from google.api_core.exceptions import AlreadyExists
 from google.cloud import firestore
 
+from pydantic import BaseModel, Field
+
 from llm import generate_structured
-from schemas import AppState, Application, MatchResult, StateEvent, UserProfile
+from schemas import (AppState, Application, MatchResult, MatchRubric, RedFlag,
+                     StateEvent, UserProfile)
 
 log = logging.getLogger("matching")
 
-MATCH_SYSTEM = """You are a rigorous recruiting analyst. Score how well a \
-candidate fits a job posting on 0-100. Be conservative: 85+ means the \
-candidate could credibly be a top-3 applicant. Never invent experience.
+MATCH_SYSTEM = """You are a rigorous recruiting analyst. Rate how well a \
+candidate fits a job posting on FOUR separate 0-10 dimensions (skills, \
+seniority, domain, logistics) — the final score is computed from your \
+ratings, not by you. Rate each dimension on evidence alone; 10 means ideal, \
+5 means genuinely mixed, 0 means no fit. Use the full range and never \
+invent experience.
 
-Write for a candidate deciding in ten seconds whether to apply. summary is \
-your out-loud verdict in one sentence. reasons tie the candidate's actual \
-history to the job's stated needs, one short sentence each. red_flags are \
-capped at five, most serious first, one gap per flag stated once — severity \
-"blocker" is reserved for a hard requirement in the posting the candidate \
-clearly fails; everything else is a "concern"."""
+summary is your out-loud one-sentence verdict for the candidate. red_flags \
+are capped at five, most serious first, one gap per flag stated once — \
+severity "blocker" is reserved for a hard requirement in the posting the \
+candidate clearly fails; everything else is a "concern"."""
 
 # Early-career candidates would score near zero against the veteran
-# yardstick — recalibrate what the numbers MEAN, not just grade softer.
+# yardstick — recalibrate what the ratings MEAN, not just grade softer.
 ENTRY_MATCH_SYSTEM = """You are a recruiting analyst evaluating an \
-EARLY-CAREER candidate (new to the job market) against a job posting. Score \
-fit 0-100 where 85+ means "a strong entry-level applicant for this role": \
-weigh education, coursework, projects, internships, and transferable skills \
-the way you would weigh work history for a veteran. Potential and \
-demonstrated learning count; years of experience do not, unless the posting \
-hard-requires them. Never invent experience.
+EARLY-CAREER candidate (new to the job market) against a job posting. Rate \
+fit on FOUR separate 0-10 dimensions (skills, seniority, domain, \
+logistics) — the final score is computed from your ratings, not by you. \
+Weigh education, coursework, projects, internships, and transferable \
+skills the way you would weigh work history for a veteran: skills = what \
+they can demonstrably do; seniority = 10 when the ROLE is entry-level \
+appropriate, low only when the role demands years they lack; domain = \
+sector familiarity from any source. Use the full 0-10 range; never invent \
+experience.
 
-Write for a candidate deciding in ten seconds whether to apply. summary is \
-your out-loud verdict in one sentence. reasons tie the candidate's actual \
-education/projects/skills to the job's stated needs. red_flags are capped \
-at five — severity "blocker" ONLY for an explicit hard requirement the \
-candidate clearly fails (e.g. "5+ years required", a degree they lack, a \
-clearance); a general preference for experience is a "concern", not a \
-blocker."""
+summary is your out-loud one-sentence verdict. red_flags capped at five — \
+severity "blocker" ONLY for an explicit hard requirement the candidate \
+clearly fails ("5+ years required", a degree they lack, a clearance); a \
+general preference for experience is a "concern", not a blocker."""
+
+# Weighted rubric -> 0-100 (integer weights summing to 100: no float fuzz).
+# Domain weighs heavy on purpose: it's what keeps same-title-different-world
+# matches (edtech vs grant writing) apart.
+RUBRIC_WEIGHTS = {"skills": 35, "seniority": 25, "domain": 30,
+                  "logistics": 10}
+
+
+class MatchAssessment(BaseModel):
+    """What the LLM emits; code turns it into a MatchResult."""
+    summary: str = ""
+    rubric: MatchRubric
+    red_flags: list[RedFlag] = Field(default_factory=list, max_length=5)
+    posting_salary: str | None = Field(
+        default=None,
+        description="salary/compensation range STATED in the posting, "
+                    "copied verbatim; null when the posting doesn't state one")
+
+
+def _to_match_result(a: MatchAssessment) -> MatchResult:
+    dims = {d: getattr(a.rubric, d) for d in RUBRIC_WEIGHTS}
+    score = round(sum(RUBRIC_WEIGHTS[d] * r.rating for d, r in dims.items()) / 10)
+    reasons = [f"{d.capitalize()} {r.rating}/10 — {r.why}".rstrip(" —")
+               for d, r in dims.items()]
+    return MatchResult(
+        score=score,
+        rubric={d: r.rating for d, r in dims.items()},
+        summary=a.summary,
+        reasons=reasons,
+        red_flags=a.red_flags[:5],
+        posting_salary=(a.posting_salary or "").strip()[:80] or None,
+    )
 
 # Titles an entry-stage user can't land — skip before spending LLM tokens.
 SENIOR_TITLE = re.compile(
@@ -81,6 +117,13 @@ def match_posting_for_user(
         return
     profile = UserProfile.model_validate(user_snap.to_dict())
 
+    # Source scoping: users are matched only against boards THEY watch.
+    # Postings are a global pool (crawled from the union of all watchlists),
+    # and without this check every user got scored against every other
+    # user's boards — wrong hits, wasted LLM spend.
+    if not force and not _board_watched(db, uid, posting):
+        return
+
     app_id = posting_id  # one application per posting per user; natural dedup
     app_ref = (
         db.collection("users").document(uid)
@@ -100,12 +143,13 @@ def match_posting_for_user(
         _bump(db, uid, prefiltered=1)
         return
 
-    result = generate_structured(
+    assessment = generate_structured(
         _match_prompt(profile, posting),
-        MatchResult,
+        MatchAssessment,
         system=ENTRY_MATCH_SYSTEM if profile.career_stage == "entry" else MATCH_SYSTEM,
-        max_tokens=1000,
+        max_tokens=1200,
     )
+    result = _to_match_result(assessment)
 
     threshold = profile.preferences.min_match_score
     passed = force or result.score >= threshold
@@ -156,6 +200,23 @@ def _revive_if_terminal(app_ref, current: dict) -> None:
         }]),
     })
     log.info("revived %s from %s -> matched", app_ref.id, state)
+
+
+def _board_watched(db: firestore.Client, uid: str, posting: dict) -> bool:
+    """Is this posting's board on the user's own watchlist? Postings with
+    source=unknown (pasted URLs, career-page crawls) can't be attributed to
+    a board and stay visible to everyone."""
+    src = posting.get("source", "unknown")
+    if src == "unknown":
+        return True
+    wl = (db.collection("users").document(uid)
+          .collection("watchlist").document("companies").get().to_dict() or {})
+    comp = (posting.get("company") or "").lower()
+    if src == "workday":
+        # watchlist stores full myworkdayjobs URLs; company is the tenant
+        return any(comp and comp in (u or "").lower()
+                   for u in wl.get("workday", []))
+    return comp in {(s or "").lower() for s in wl.get(src, [])}
 
 
 def _prefilter(profile: UserProfile, posting: dict) -> bool:
