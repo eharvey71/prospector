@@ -341,7 +341,8 @@ export default function ReviewQueue() {
         const p = snap.data();
         setPostings(prev => ({
           ...prev,
-          [m.posting_id]: { title: p.title, company: p.company, url: p.url },
+          [m.posting_id]: { title: p.title, company: p.company, url: p.url,
+                            active: p.active },
         }));
       }
     });
@@ -352,12 +353,20 @@ export default function ReviewQueue() {
     const p = postings[a.posting_id];
     if (!p) return "…";
     const line = `${p.title} @ ${p.company}`;
+    const closed = p.active === false && (
+      <span style={{ color: T.warn, fontSize: "0.75em", marginLeft: 8 }}>
+        posting may have closed
+      </span>
+    );
     return p.url ? (
-      <a href={p.url} target="_blank" rel="noreferrer"
-         style={{ color: "inherit", textDecoration: "none" }}>
-        {line} <span style={{ color: T.accent, fontSize: "0.8em" }}>↗</span>
-      </a>
-    ) : line;
+      <>
+        <a href={p.url} target="_blank" rel="noreferrer"
+           style={{ color: "inherit", textDecoration: "none" }}>
+          {line} <span style={{ color: T.accent, fontSize: "0.8em" }}>↗</span>
+        </a>
+        {closed}
+      </>
+    ) : <>{line}{closed}</>;
   };
 
   async function addJob() {

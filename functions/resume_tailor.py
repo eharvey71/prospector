@@ -179,6 +179,11 @@ def _tx(s: str) -> str:
 
 
 def render_pdf(t: TailoredResume, profile: UserProfile) -> bytes:
+    """One-column layout. Every block RESETS X to the left margin and uses
+    explicit new_x/new_y — fpdf2's multi_cell leaves the cursor at the
+    block's right edge by default, which shoved every bullet after the
+    first into a skinny column at the page's right. Long titles wrap
+    instead of overflowing into the right-aligned dates."""
     from fpdf import FPDF
 
     pdf = FPDF(format="letter")
@@ -186,66 +191,78 @@ def render_pdf(t: TailoredResume, profile: UserProfile) -> bytes:
     pdf.set_margins(18, 15, 18)
     pdf.add_page()
     W = pdf.epw  # effective page width
+    DATE_W = 34  # right column reserved for dates/years
+
+    def block(text: str, *, size=10, style="", width=None, height=5) -> None:
+        pdf.set_x(pdf.l_margin)
+        pdf.set_font("Helvetica", style, size)
+        pdf.multi_cell(width or W, height, _tx(text),
+                       new_x="LMARGIN", new_y="NEXT")
 
     def heading(text: str) -> None:
         pdf.ln(2)
-        pdf.set_font("Helvetica", "B", 11)
-        pdf.cell(W, 6, _tx(text.upper()), new_x="LMARGIN", new_y="NEXT")
+        block(text.upper(), size=11, style="B", height=6)
         y = pdf.get_y()
         pdf.line(pdf.l_margin, y, pdf.l_margin + W, y)
         pdf.ln(1.5)
 
+    def titled_row(left: str, right: str) -> None:
+        """Bold wrapped title on the left, date right-aligned at its top."""
+        pdf.set_x(pdf.l_margin)
+        y0 = pdf.get_y()
+        pdf.set_font("Helvetica", "B", 10.5)
+        pdf.multi_cell(W - DATE_W, 5.5, _tx(left),
+                       new_x="LMARGIN", new_y="NEXT")
+        y1 = pdf.get_y()
+        if right:
+            pdf.set_xy(pdf.l_margin + W - DATE_W, y0)
+            pdf.set_font("Helvetica", "", 9)
+            pdf.cell(DATE_W, 5.5, _tx(right), align="R")
+        pdf.set_xy(pdf.l_margin, max(y1, y0 + 5.5))
+
+    def bullet(text: str) -> None:
+        block(f"- {text}", width=W - 4)
+
     # Name + contact
-    pdf.set_font("Helvetica", "B", 16)
-    pdf.cell(W, 8, _tx(profile.name), new_x="LMARGIN", new_y="NEXT")
+    block(profile.name, size=16, style="B", height=8)
     contact = " | ".join(x for x in (
         profile.email, profile.phone, profile.location,
         profile.linkedin, profile.website) if x)
-    pdf.set_font("Helvetica", "", 9)
-    pdf.multi_cell(W, 4.5, _tx(contact))
+    block(contact, size=9, height=4.5)
     pdf.ln(1)
 
     if t.summary:
-        pdf.set_font("Helvetica", "", 10)
-        pdf.multi_cell(W, 5, _tx(t.summary))
+        block(t.summary)
 
     if t.skills:
         heading("Skills")
-        pdf.set_font("Helvetica", "", 10)
-        pdf.multi_cell(W, 5, _tx(" · ".join(t.skills)))
+        block(" · ".join(t.skills))
 
     if t.roles:
         heading("Experience")
         for r in t.roles:
-            pdf.set_font("Helvetica", "B", 10.5)
-            pdf.cell(W - 40, 5.5, _tx(f"{r.title} — {r.company}"))
-            pdf.set_font("Helvetica", "", 9)
-            pdf.cell(40, 5.5, _tx(r.dates), align="R", new_x="LMARGIN", new_y="NEXT")
+            titled_row(f"{r.title} — {r.company}", r.dates)
             pdf.set_font("Helvetica", "", 10)
             for b in r.bullets:
-                pdf.multi_cell(W - 4, 5, _tx(f"- {b}"))
+                bullet(b)
             pdf.ln(1)
 
     if t.projects:
         heading("Projects")
         for p in t.projects:
-            pdf.set_font("Helvetica", "B", 10.5)
             tech = f"  ({', '.join(p.tech)})" if p.tech else ""
-            pdf.cell(W, 5.5, _tx(p.name + tech), new_x="LMARGIN", new_y="NEXT")
+            titled_row(p.name + tech, "")
             pdf.set_font("Helvetica", "", 10)
-            pdf.multi_cell(W - 4, 5, _tx(f"- {p.blurb}"))
+            bullet(p.blurb)
             pdf.ln(1)
 
     if t.education:
         heading("Education")
         for e in t.education:
-            pdf.set_font("Helvetica", "B", 10.5)
-            pdf.cell(W - 30, 5.5, _tx(f"{e.degree}, {e.school}"))
-            pdf.set_font("Helvetica", "", 9)
-            pdf.cell(30, 5.5, _tx(e.year or ""), align="R", new_x="LMARGIN", new_y="NEXT")
+            titled_row(f"{e.degree}, {e.school}", e.year or "")
             pdf.set_font("Helvetica", "", 10)
             for h in e.highlights:
-                pdf.multi_cell(W - 4, 5, _tx(f"- {h}"))
+                bullet(h)
             pdf.ln(1)
 
     return bytes(pdf.output())

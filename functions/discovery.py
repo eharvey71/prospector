@@ -77,25 +77,16 @@ def run_discovery(db: firestore.Client) -> int:
             log.exception("discovery source %s failed; continuing", label)
             return 0
 
+    fetchers = {
+        "greenhouse": _fetch_greenhouse, "lever": _fetch_lever,
+        "workday": _fetch_workday, "ashby": _fetch_ashby,
+        "smartrecruiters": _fetch_smartrecruiters, "workable": _fetch_workable,
+    }
     with httpx.Client(timeout=HTTP_TIMEOUT, headers={"User-Agent": "job-engine/0.1"}) as client:
-        for board in sorted(boards.get("greenhouse", set())):
-            count += safe(lambda b=board: _upsert_all(db, _fetch_greenhouse(client, b)),
-                          label=f"greenhouse:{board}")
-        for board in sorted(boards.get("lever", set())):
-            count += safe(lambda b=board: _upsert_all(db, _fetch_lever(client, b)),
-                          label=f"lever:{board}")
-        for wd_url in sorted(boards.get("workday", set())):
-            count += safe(lambda u=wd_url: _upsert_all(db, _fetch_workday(client, u)),
-                          label=f"workday:{wd_url}")
-        for board in sorted(boards.get("ashby", set())):
-            count += safe(lambda b=board: _upsert_all(db, _fetch_ashby(client, b)),
-                          label=f"ashby:{board}")
-        for board in sorted(boards.get("smartrecruiters", set())):
-            count += safe(lambda b=board: _upsert_all(db, _fetch_smartrecruiters(client, b)),
-                          label=f"smartrecruiters:{board}")
-        for board in sorted(boards.get("workable", set())):
-            count += safe(lambda b=board: _upsert_all(db, _fetch_workable(client, b)),
-                          label=f"workable:{board}")
+        for kind, fetch in fetchers.items():
+            for board in sorted(boards.get(kind, set())):
+                count += safe(lambda f=fetch, b=board: _upsert_board(db, f(client, b)),
+                              label=f"{kind}:{board}")
         # Career pages last — they're the only LLM-dependent source, so an
         # API outage degrades to "no career-page postings this crawl".
         for page_url in sorted(boards.get("custom", set())):
@@ -280,12 +271,15 @@ def _fetch_smartrecruiters(client: httpx.Client, board: str) -> list[JobPosting]
                 (s or {}).get("text", "") for s in sections.values()))
         except (httpx.HTTPError, ValueError):
             pass
+        # Public URL needs the {id}-{title-slug} form — a bare id bounces
+        # to the company's main jobs page.
+        slug = re.sub(r"[^a-z0-9]+", "-", (item.get("name") or "").lower()).strip("-")
         postings.append(JobPosting(
             source=AtsType.SMARTRECRUITERS,
             external_id=str(pid),
             company=board,
             title=item.get("name", ""),
-            url=f"https://jobs.smartrecruiters.com/{board}/{pid}",
+            url=f"https://jobs.smartrecruiters.com/{board}/{pid}-{slug}",
             location=((item.get("location") or {}).get("city")),
             description_text=description,
         ))
@@ -396,6 +390,36 @@ def _workday_description(client: httpx.Client, cxs: str, ext_path: str) -> str:
         return _strip_html(info.get("jobDescription", ""))
     except (httpx.HTTPError, ValueError):
         return ""
+
+
+def _upsert_board(db: firestore.Client, postings: list[JobPosting]) -> int:
+    """Upsert one board's current postings AND deactivate this board's
+    postings that no longer appear — a closed job otherwise stayed 'active'
+    forever and matched users against a dead link. A board that fetched
+    empty (error or genuinely zero) deactivates nothing: a transient fetch
+    failure must not nuke a live board."""
+    n = _upsert_all(db, postings)
+    if not postings:
+        return 0
+    source, company = postings[0].source.value, postings[0].company
+    keep = {p.posting_id for p in postings}
+    stale = (db.collection("jobPostings")
+             .where(filter=FieldFilter("source", "==", source))
+             .where(filter=FieldFilter("company", "==", company))
+             .where(filter=FieldFilter("active", "==", True)).stream())
+    batch = db.batch()
+    gone = 0
+    for doc in stale:
+        if doc.id not in keep:
+            batch.update(doc.reference, {"active": False})
+            gone += 1
+            if gone % 400 == 0:
+                batch.commit()
+                batch = db.batch()
+    batch.commit()
+    if gone:
+        log.info("%s:%s deactivated %d closed postings", source, company, gone)
+    return n
 
 
 def _upsert_all(db: firestore.Client, postings: list[JobPosting]) -> int:
