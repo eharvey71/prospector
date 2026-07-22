@@ -75,6 +75,12 @@ service cloud.firestore {
         allow read, write: if isOwner(uid);
       }
 
+      // Funnel counters the matcher writes (engine-only writes).
+      match /stats/{docId} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+
       // LLM extraction from an uploaded resume, staged for review in the
       // profile UI. Engine-written via Admin SDK; clients read it and may
       // delete it once applied or dismissed.

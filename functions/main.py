@@ -231,6 +231,28 @@ def on_resume_uploaded(event: storage_fn.CloudEvent[storage_fn.StorageObjectData
 
 
 # ---------------------------------------------------------------------------
+# Profile writes -> title-synonym expansion (loop-guarded: the write-back
+# doesn't change titles, so the retrigger no-ops)
+# ---------------------------------------------------------------------------
+
+@firestore_fn.on_document_written(
+    document="users/{uid}", timeout_sec=120,
+    secrets=["ANTHROPIC_API_KEY"],
+)
+def on_user_written(event: firestore_fn.Event) -> None:
+    if event.data is None or event.data.after is None:
+        return
+    after = event.data.after.to_dict()
+    if not after:
+        return
+    from synonyms import maybe_expand_titles
+    try:
+        maybe_expand_titles(_db(), event.params["uid"], after)
+    except Exception:
+        log.exception("title synonym expansion failed uid=%s", event.params["uid"])
+
+
+# ---------------------------------------------------------------------------
 # Application state router
 # ---------------------------------------------------------------------------
 

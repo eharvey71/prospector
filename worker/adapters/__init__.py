@@ -12,7 +12,12 @@ from .lever import LeverAdapter
 _REGISTRY: dict[AtsType, SubmissionAdapter] = {
     AtsType.GREENHOUSE: GreenhouseAdapter(),
     AtsType.LEVER: LeverAdapter(),
-    AtsType.UNKNOWN: AgenticAdapter(),  # Tier 2: LLM plans, code fills+verifies
+    # Public-form ATSes without a deterministic adapter yet: Tier 2 discovers
+    # the form shape per-page (LLM plans, code fills+verifies).
+    AtsType.ASHBY: AgenticAdapter(),
+    AtsType.SMARTRECRUITERS: AgenticAdapter(),
+    AtsType.WORKABLE: AgenticAdapter(),
+    AtsType.UNKNOWN: AgenticAdapter(),
 }
 
 

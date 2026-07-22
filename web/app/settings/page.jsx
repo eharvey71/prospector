@@ -27,6 +27,9 @@ export default function SettingsPage() {
   const [leverBoards, setLeverBoards] = useState("");
   const [customPages, setCustomPages] = useState(""); // career page URLs
   const [workdaySites, setWorkdaySites] = useState(""); // myworkdayjobs URLs
+  const [ashbyBoards, setAshbyBoards] = useState("");
+  const [srBoards, setSrBoards] = useState("");       // smartrecruiters ids
+  const [workableBoards, setWorkableBoards] = useState("");
   const [suggestRole, setSuggestRole] = useState("");
   const [suggesting, setSuggesting] = useState(false);
   const [suggestions, setSuggestions] = useState([]); // verified boards
@@ -57,6 +60,9 @@ export default function SettingsPage() {
         setLeverBoards((wl.data().lever || []).join(", "));
         setCustomPages((wl.data().custom || []).join(", "));
         setWorkdaySites((wl.data().workday || []).join(", "));
+        setAshbyBoards((wl.data().ashby || []).join(", "));
+        setSrBoards((wl.data().smartrecruiters || []).join(", "));
+        setWorkableBoards((wl.data().workable || []).join(", "));
       }
     })();
   }, [user]);
@@ -82,6 +88,9 @@ export default function SettingsPage() {
       lever: csv(leverBoards),
       custom: csv(customPages),
       workday: csv(workdaySites),
+      ashby: csv(ashbyBoards),
+      smartrecruiters: csv(srBoards),
+      workable: csv(workableBoards),
     });
     setStatus("Saved ✓");
     setTimeout(() => setStatus(""), 2500);
@@ -103,6 +112,9 @@ export default function SettingsPage() {
         setLeverBoards((wl.data().lever || []).join(", "));
         setCustomPages((wl.data().custom || []).join(", "));
         setWorkdaySites((wl.data().workday || []).join(", "));
+        setAshbyBoards((wl.data().ashby || []).join(", "));
+        setSrBoards((wl.data().smartrecruiters || []).join(", "));
+        setWorkableBoards((wl.data().workable || []).join(", "));
       }
       setTrackName("");
     } catch (e) {
@@ -260,6 +272,12 @@ export default function SettingsPage() {
         </span>
         <input style={input} value={workdaySites} onChange={e => setWorkdaySites(e.target.value)}
                placeholder="https://company.wd5.myworkdayjobs.com/External" />
+        <span style={label}>Ashby boards (jobs.ashbyhq.com/SLUG)</span>
+        <input style={input} value={ashbyBoards} onChange={e => setAshbyBoards(e.target.value)} />
+        <span style={label}>SmartRecruiters companies (careers.smartrecruiters.com/COMPANY — case matters)</span>
+        <input style={input} value={srBoards} onChange={e => setSrBoards(e.target.value)} />
+        <span style={label}>Workable boards (apply.workable.com/SLUG)</span>
+        <input style={input} value={workableBoards} onChange={e => setWorkableBoards(e.target.value)} />
 
         <h3 style={{ marginTop: 20 }}>Find companies for me</h3>
         <p style={{ color: T.muted, fontSize: 13 }}>

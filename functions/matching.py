@@ -54,6 +54,18 @@ SENIOR_TITLE = re.compile(
     re.I)
 
 
+def _bump(db: firestore.Client, uid: str, **fields: int) -> None:
+    """Increment per-user funnel counters. Best-effort: stats must never
+    break matching."""
+    try:
+        doc = {k: firestore.Increment(v) for k, v in fields.items()}
+        doc["updatedAt"] = datetime.now(timezone.utc)
+        (db.collection("users").document(uid)
+         .collection("stats").document("funnel").set(doc, merge=True))
+    except Exception:
+        log.warning("funnel bump failed uid=%s", uid, exc_info=True)
+
+
 def match_posting_for_user(
     db: firestore.Client,
     uid: str,
@@ -69,9 +81,6 @@ def match_posting_for_user(
         return
     profile = UserProfile.model_validate(user_snap.to_dict())
 
-    if not force and not _prefilter(profile, posting):
-        return
-
     app_id = posting_id  # one application per posting per user; natural dedup
     app_ref = (
         db.collection("users").document(uid)
@@ -84,6 +93,11 @@ def match_posting_for_user(
         # previous run rejected or failed it.
         if force:
             _revive_if_terminal(app_ref, snap.to_dict() or {})
+        return
+
+    _bump(db, uid, seen=1)
+    if not force and not _prefilter(profile, posting):
+        _bump(db, uid, prefiltered=1)
         return
 
     result = generate_structured(
@@ -120,6 +134,7 @@ def match_posting_for_user(
         if force:
             _revive_if_terminal(app_ref, app_ref.get().to_dict() or {})
         return
+    _bump(db, uid, scored=1, **({"matched": 1} if passed else {}))
     log.info("uid=%s posting=%s -> %s (%s)", uid, posting_id, state.value, note)
 
 
@@ -154,7 +169,10 @@ def _prefilter(profile: UserProfile, posting: dict) -> bool:
         return False
 
     title = (posting.get("title") or "").lower()
-    wanted = [t.lower() for t in profile.preferences.titles]
+    # Titles plus their LLM-expanded synonyms — "grant writer" also matches
+    # "Development Director" postings (see synonyms.py).
+    wanted = [t.lower() for t in (profile.preferences.titles
+                                  + profile.preferences.title_synonyms)]
     if wanted and not any(w in title for w in wanted):
         # Fall back to skill overlap in the description
         desc = (posting.get("descriptionText") or posting.get("description_text") or "").lower()

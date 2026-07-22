@@ -39,6 +39,11 @@ log = logging.getLogger("discovery")
 
 GREENHOUSE_URL = "https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true"
 LEVER_URL = "https://api.lever.co/v0/postings/{board}?mode=json"
+ASHBY_URL = "https://api.ashbyhq.com/posting-api/job-board/{board}?includeCompensation=true"
+SMARTRECRUITERS_URL = "https://api.smartrecruiters.com/v1/companies/{board}/postings"
+SMARTRECRUITERS_DETAIL = "https://api.smartrecruiters.com/v1/companies/{board}/postings/{pid}"
+WORKABLE_URL = "https://apply.workable.com/api/v1/widget/accounts/{board}?details=true"
+MAX_DETAIL_FETCHES = 80       # per-board cap on per-job description requests
 
 HTTP_TIMEOUT = 20.0
 MAX_LINKS_TO_CLASSIFY = 150   # anchors handed to the LLM per career page
@@ -82,6 +87,15 @@ def run_discovery(db: firestore.Client) -> int:
         for wd_url in sorted(boards.get("workday", set())):
             count += safe(lambda u=wd_url: _upsert_all(db, _fetch_workday(client, u)),
                           label=f"workday:{wd_url}")
+        for board in sorted(boards.get("ashby", set())):
+            count += safe(lambda b=board: _upsert_all(db, _fetch_ashby(client, b)),
+                          label=f"ashby:{board}")
+        for board in sorted(boards.get("smartrecruiters", set())):
+            count += safe(lambda b=board: _upsert_all(db, _fetch_smartrecruiters(client, b)),
+                          label=f"smartrecruiters:{board}")
+        for board in sorted(boards.get("workable", set())):
+            count += safe(lambda b=board: _upsert_all(db, _fetch_workable(client, b)),
+                          label=f"workable:{board}")
         # Career pages last — they're the only LLM-dependent source, so an
         # API outage degrades to "no career-page postings this crawl".
         for page_url in sorted(boards.get("custom", set())):
@@ -91,15 +105,16 @@ def run_discovery(db: firestore.Client) -> int:
     return count
 
 
+WATCHLIST_FIELDS = ("greenhouse", "lever", "custom", "workday",
+                    "ashby", "smartrecruiters", "workable")
+
+
 def _collect_watchlists(db: firestore.Client) -> dict[str, set[str]]:
-    boards: dict[str, set[str]] = {
-        "greenhouse": set(), "lever": set(), "custom": set(), "workday": set()}
+    boards: dict[str, set[str]] = {f: set() for f in WATCHLIST_FIELDS}
     for doc in db.collection_group("watchlist").stream():
         data = doc.to_dict() or {}
-        boards["greenhouse"].update(data.get("greenhouse", []))
-        boards["lever"].update(data.get("lever", []))
-        boards["custom"].update(data.get("custom", []))
-        boards["workday"].update(data.get("workday", []))
+        for f in WATCHLIST_FIELDS:
+            boards[f].update(data.get(f, []))
     return boards
 
 
@@ -209,6 +224,98 @@ def _fetch_lever(client: httpx.Client, board: str) -> list[JobPosting]:
             url=job.get("hostedUrl"),
             location=(job.get("categories") or {}).get("location"),
             description_text=_strip_html(job.get("descriptionPlain") or job.get("description", "")),
+        ))
+    return postings
+
+
+# ---------------------------------------------------------------------------
+# Ashby / SmartRecruiters / Workable (public JSON APIs, no auth)
+# ---------------------------------------------------------------------------
+
+def _fetch_ashby(client: httpx.Client, board: str) -> list[JobPosting]:
+    try:
+        resp = client.get(ASHBY_URL.format(board=board))
+        resp.raise_for_status()
+        jobs = resp.json().get("jobs", [])
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("ashby board %s failed: %s", board, exc)
+        return []
+    postings = []
+    for job in jobs:
+        url = job.get("jobUrl") or job.get("applyUrl")
+        if not job.get("id") or not url:
+            continue
+        postings.append(JobPosting(
+            source=AtsType.ASHBY,
+            external_id=str(job["id"]),
+            company=board,
+            title=job.get("title", ""),
+            url=url,
+            location=job.get("location"),
+            description_text=_strip_html(job.get("descriptionHtml", "")),
+        ))
+    return postings
+
+
+def _fetch_smartrecruiters(client: httpx.Client, board: str) -> list[JobPosting]:
+    try:
+        resp = client.get(SMARTRECRUITERS_URL.format(board=board))
+        resp.raise_for_status()
+        items = resp.json().get("content", [])
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("smartrecruiters board %s failed: %s", board, exc)
+        return []
+    postings = []
+    for item in items[:MAX_DETAIL_FETCHES]:
+        pid = item.get("id")
+        if not pid:
+            continue
+        # Listing has no description; the detail endpoint has jobAd sections.
+        description = ""
+        try:
+            detail = client.get(SMARTRECRUITERS_DETAIL.format(board=board, pid=pid))
+            detail.raise_for_status()
+            sections = (detail.json().get("jobAd") or {}).get("sections") or {}
+            description = _strip_html(" ".join(
+                (s or {}).get("text", "") for s in sections.values()))
+        except (httpx.HTTPError, ValueError):
+            pass
+        postings.append(JobPosting(
+            source=AtsType.SMARTRECRUITERS,
+            external_id=str(pid),
+            company=board,
+            title=item.get("name", ""),
+            url=f"https://jobs.smartrecruiters.com/{board}/{pid}",
+            location=((item.get("location") or {}).get("city")),
+            description_text=description,
+        ))
+    return postings
+
+
+def _fetch_workable(client: httpx.Client, board: str) -> list[JobPosting]:
+    try:
+        resp = client.get(WORKABLE_URL.format(board=board))
+        resp.raise_for_status()
+        jobs = resp.json().get("jobs", [])
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("workable board %s failed: %s", board, exc)
+        return []
+    postings = []
+    for job in jobs:
+        code = job.get("shortcode")
+        url = job.get("url") or (f"https://apply.workable.com/{board}/j/{code}/"
+                                 if code else None)
+        if not code or not url:
+            continue
+        postings.append(JobPosting(
+            source=AtsType.WORKABLE,
+            external_id=str(code),
+            company=board,
+            title=job.get("title", ""),
+            url=url,
+            location=(job.get("location") or {}).get("city")
+                     or job.get("country"),
+            description_text=_strip_html(job.get("description", "")),
         ))
     return postings
 

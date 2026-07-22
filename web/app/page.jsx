@@ -266,6 +266,7 @@ export default function ReviewQueue() {
   const [threshold, setThreshold] = useState(70);   // preferences.min_match_score
   const [tab, setTab] = useState("review");
   const [queryError, setQueryError] = useState(""); // surfaced, never swallowed
+  const [funnel, setFunnel] = useState(null);       // stats/funnel counters
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
@@ -279,6 +280,9 @@ export default function ReviewQueue() {
       const t = d.preferences?.min_match_score;
       if (typeof t === "number") setThreshold(t);
     });
+    return onSnapshot(doc(db, "users", user.uid, "stats", "funnel"),
+      (snap) => setFunnel(snap.exists() ? snap.data() : null),
+      () => {});  // stats are optional — never surface their errors
   }, [user]);
 
   useEffect(() => {
@@ -538,6 +542,14 @@ export default function ReviewQueue() {
         </div>
         {addStatus && <p style={{ color: T.muted, marginBottom: 0 }}>{addStatus}</p>}
       </section>
+
+      {funnel && (
+        <p style={{ color: T.muted, fontSize: 13, margin: "0 0 12px" }}
+           title="Where crawled jobs went: seen = evaluated for you; filtered = didn't resemble your titles/skills (no cost); scored = rated by the engine; matched = cleared your bar">
+          Funnel: {funnel.seen || 0} jobs seen · {funnel.prefiltered || 0} filtered
+          out · {funnel.scored || 0} scored · {funnel.matched || 0} matched
+        </p>
+      )}
 
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
         {TABS.map((t) => {
