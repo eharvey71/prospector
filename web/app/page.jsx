@@ -200,6 +200,64 @@ function ScreenshotLinks({ paths }) {
   );
 }
 
+// Engine health strip: last crawl, today's LLM usage, recent pipeline
+// errors. Turns "why is my queue empty" from a debugging session into a
+// glance. Amber = something deserves attention.
+function HealthStrip() {
+  const [h, setH] = useState(null);
+  useEffect(() => {
+    (async () => {
+      const day = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      const [crawl, llm, errors] = await Promise.all([
+        getDoc(doc(db, "health", "crawl")),
+        getDoc(doc(db, "health", `llm_${day}`)),
+        getDoc(doc(db, "health", "errors")),
+      ]).then((snaps) => snaps.map((s) => (s.exists() ? s.data() : null)));
+      setH({ crawl, llm, errors });
+    })().catch(() => {});
+  }, []);
+  if (!h) return null;
+
+  const ts = (v) => v && new Date(v.seconds ? v.seconds * 1000 : v);
+  const ago = (d) => {
+    if (!d) return null;
+    const mins = Math.round((Date.now() - d.getTime()) / 60000);
+    return mins < 60 ? `${mins}m ago` : mins < 60 * 48
+      ? `${Math.round(mins / 60)}h ago` : `${Math.round(mins / 1440)}d ago`;
+  };
+
+  const crawlAt = ts(h.crawl?.lastRunAt);
+  const crawlStale = !crawlAt || (Date.now() - crawlAt.getTime()) > 8 * 3600e3;
+  const crawlBad = h.crawl && h.crawl.ok === false;
+  const errAt = ts(h.errors?.lastErrorAt);
+  const errRecent = errAt && (Date.now() - errAt.getTime()) < 24 * 3600e3;
+  const kTok = ((h.llm?.input_tokens || 0) + (h.llm?.output_tokens || 0)) / 1000;
+
+  return (
+    <p className="funnel" style={{ marginTop: -12 }}>
+      <span style={{ color: crawlBad || crawlStale ? "var(--warn)" : undefined }}
+            title={crawlBad ? h.crawl?.error : undefined}>
+        crawl {crawlAt ? `${ago(crawlAt)}` : "never"}
+        {h.crawl?.ok === true && ` · ${h.crawl.postings} postings`}
+        {crawlBad && " · FAILED"}
+        {!crawlBad && crawlStale && crawlAt && " · overdue"}
+      </span>
+      {" | "}
+      <span title="LLM usage today (all users)">
+        LLM today: {h.llm?.calls || 0} calls · {Math.round(kTok)}k tokens
+        {(h.llm?.errors || 0) > 0 && (
+          <span style={{ color: "var(--warn)" }}> · {h.llm.errors} failed</span>
+        )}
+      </span>
+      {errRecent && (
+        <span style={{ color: "var(--warn)" }} title={h.errors?.lastError}>
+          {" | "}pipeline errors in last 24h — hover for the latest
+        </span>
+      )}
+    </p>
+  );
+}
+
 function ResumeLink({ path }) {
   const [url, setUrl] = useState(null);
   useEffect(() => {
@@ -514,6 +572,7 @@ export default function ReviewQueue() {
           {funnel.scored || 0} scored · {funnel.matched || 0} matched
         </p>
       )}
+      <HealthStrip />
 
       <div className="tabs">
         {TABS.map((t) => (

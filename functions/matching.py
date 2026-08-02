@@ -234,12 +234,22 @@ def _prefilter(profile: UserProfile, posting: dict) -> bool:
     # "Development Director" postings (see synonyms.py).
     wanted = [t.lower() for t in (profile.preferences.titles
                                   + profile.preferences.title_synonyms)]
-    if wanted and not any(w in title for w in wanted):
-        # Fall back to skill overlap in the description
-        desc = (posting.get("descriptionText") or posting.get("description_text") or "").lower()
-        hits = sum(1 for s in profile.skills if s.lower() in desc)
-        if hits < 3:
-            return False
+    title_hit = any(w in title for w in wanted)
+    desc = (posting.get("descriptionText") or posting.get("description_text") or "").lower()
+    # Skill vocabulary includes project tech — for early-career users the
+    # projects often carry skills the flat list doesn't repeat.
+    terms = {s.lower() for s in profile.skills}
+    terms.update(t.lower() for p in profile.projects for t in p.tech)
+    hits = sum(1 for s in terms if s and s in desc)
+
+    if wanted and not title_hit and hits < 3:
+        return False
+    # Deterministic prescore: a title hit whose description shares ZERO
+    # skill vocabulary is the cross-domain trap ("Director of X" in a world
+    # the candidate has never touched) — don't spend an LLM call on it.
+    # Thin descriptions are exempt: no text to find skills in.
+    if title_hit and hits == 0 and len(desc) >= 500:
+        return False
     return True
 
 

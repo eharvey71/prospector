@@ -27,6 +27,13 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Engine health (crawl status, LLM usage, error counters) — global,
+    // engine-written, readable by any signed-in user.
+    match /health/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
+    }
+
     // ------------------------------------------------------------------
     // Per-user data
     // ------------------------------------------------------------------
