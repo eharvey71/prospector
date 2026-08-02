@@ -305,7 +305,12 @@ def on_application_written(event: firestore_fn.Event) -> None:
         # "write the letter" (request_draft). User-pasted jobs always draft.
         prefs = (db.collection("users").document(uid).get().to_dict()
                  or {}).get("preferences") or {}
-        if not prefs.get("auto_draft", False) and not after.get("user_added"):
+        # auto_draft is about SPEND and applies to every match, including
+        # ones the user added by URL. (user_added bypasses the score gate in
+        # matching.py — that's a separate thing: the job is wanted
+        # regardless of score. It must not also authorize LLM spend the
+        # user switched off.)
+        if not prefs.get("auto_draft", False):
             log.info("auto_draft off; app %s waits in matched", app_id)
             return
         from drafting import draft_application

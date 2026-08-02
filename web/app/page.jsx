@@ -42,11 +42,12 @@ function MatchInsight({ app, threshold, queue }) {
   const rubric = m.rubric || {};
   const hasRubric = RUBRIC_ORDER.some((k) => k in rubric);
 
-  const whyHere = app.user_added
+  const whyHere = (app.user_added
     ? score < threshold
       ? `Below your ${threshold}-point bar — shown because you added it yourself.`
       : "You added this job yourself."
-    : `Cleared your ${threshold}-point bar${queue === "matched" ? "; auto-draft is off, so it waits for your go-ahead" : ""}.`;
+    : `Cleared your ${threshold}-point bar.`)
+    + (queue === "matched" ? " Auto-draft is off, so no letter is written until you ask." : "");
 
   const nextStep = queue === "review"
     ? "Edit the letter below (saves when you click away), then Approve or Reject."
@@ -380,7 +381,12 @@ export default function ReviewQueue() {
     try {
       const call = httpsCallable(functions, "add_job_url", { timeout: 300_000 });
       const res = await call({ url });
-      setAddStatus(`Added: ${res.data.title} @ ${res.data.company} — drafting now; it will appear in Review when ready`);
+      setAddStatus(
+        `Added: ${res.data.title} @ ${res.data.company} — `
+        + (userDoc?.preferences?.auto_draft
+           ? "drafting now; it will appear in Review when ready"
+           : "waiting in Matches; open it and click \"Write the letter\" when you want one")
+      );
       setJobUrl("");
     } catch (e) {
       setAddStatus(`Couldn't add it: ${e.message}`);

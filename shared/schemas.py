@@ -301,7 +301,9 @@ class StateEvent(BaseModel):
 
 class Application(BaseModel):
     posting_id: str
-    user_added: bool = False        # pasted by the user: skip gates, always draft
+    user_added: bool = False        # pasted/added by the user: bypasses the
+                                    # score gate only. Drafting still obeys
+                                    # preferences.auto_draft.
     state: AppState = AppState.DISCOVERED
     state_history: list[StateEvent] = Field(default_factory=list)
     match: Optional[MatchResult] = None
