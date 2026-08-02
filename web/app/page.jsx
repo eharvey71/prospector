@@ -2,7 +2,7 @@
 // Queue: compact scannable rows, one per job; click a row to expand its
 // details, letter, and actions. Color is reserved for meaning.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
 import {
   collection, doc, getDoc, limit, onSnapshot, orderBy, query,
@@ -290,7 +290,9 @@ export default function ReviewQueue() {
   const [postings, setPostings] = useState({});
   const [draftingIds, setDraftingIds] = useState([]);
   const [threshold, setThreshold] = useState(70);
-  const [tab, setTab] = useState("review");
+  const [tab, setTab] = useState("matches");
+  const tabChosen = useRef(false);   // stop auto-selection once the user
+                                     // clicks (or once we've picked)
   const [queryError, setQueryError] = useState("");
   const [funnel, setFunnel] = useState(null);
   const [openId, setOpenId] = useState(null);   // one expanded row at a time
@@ -357,6 +359,19 @@ export default function ReviewQueue() {
       }
     });
   }, [matches, apps, escalated, inflight, done]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Land the user where the workflow actually starts: the first tab (in
+  // pipeline order) that has work in it. Runs until data first appears or
+  // the user clicks a tab, then never again.
+  useEffect(() => {
+    if (tabChosen.current) return;
+    const first = [["matches", matches], ["review", apps], ["needs_you", escalated]]
+      .find(([, list]) => list.length > 0);
+    if (first) {
+      setTab(first[0]);
+      tabChosen.current = true;
+    }
+  }, [matches, apps, escalated]);
 
   async function addJob() {
     if (!jobUrl.trim()) return;
@@ -491,13 +506,14 @@ export default function ReviewQueue() {
     );
   }
 
+  // Pipeline order: a job moves left to right through these tabs.
   const TABS = [
+    { key: "matches", label: "Matches", count: matches.length, urgent: true,
+      blurb: "Scored above your bar but no letter yet. Pick which ones get one." },
     { key: "review", label: "Review", count: apps.length, urgent: true,
       blurb: "Drafted letters waiting for your approval. Nothing is submitted until you approve it here." },
     { key: "needs_you", label: "Needs you", count: escalated.length, urgent: true,
       blurb: "The engine got stuck mid-submission. Finish these by hand — answers are prepared." },
-    { key: "matches", label: "Matches", count: matches.length,
-      blurb: "Scored above your bar but no letter yet. Pick which ones get one." },
     { key: "inflight", label: "In flight", count: inflight.length,
       blurb: "Approved applications the engine is submitting right now." },
     { key: "done", label: "Done", count: done.length,
@@ -576,7 +592,8 @@ export default function ReviewQueue() {
 
       <div className="tabs">
         {TABS.map((t) => (
-          <button key={t.key} onClick={() => setTab(t.key)}
+          <button key={t.key}
+                  onClick={() => { tabChosen.current = true; setTab(t.key); }}
                   className={"tab" + (t.key === tab ? " active" : "")}>
             {t.label}
             <span className={"n" + (t.count > 0 && t.urgent ? " hot" : "")}>{t.count}</span>

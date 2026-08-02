@@ -188,3 +188,29 @@ details.panel .panelbody { padding: 0 16px 16px; }
   width: 100%; min-height: 220px; margin: 10px 0; font-size: 13.5px;
 }
 .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
+
+/* ---------- section tints: super-thin colored outlines ---------- */
+details.panel.tint-blue   { border-color: rgba(111, 159, 243, .45); }
+details.panel.tint-green  { border-color: rgba(127, 191, 127, .45); }
+details.panel.tint-purple { border-color: rgba(167, 139, 218, .45); }
+details.panel.tint-amber  { border-color: rgba(224, 179, 76, .45); }
+.stepnum {
+  display: inline-flex; width: 21px; height: 21px; border-radius: 50%;
+  align-items: center; justify-content: center; font-size: 12px;
+  margin-right: 10px; border: 1px solid currentColor; flex: none;
+}
+.stepnum.blue { color: var(--accent); }
+.stepnum.green { color: var(--ok); }
+.stepnum.purple { color: #a78bda; }
+.stepnum.amber { color: var(--warn); }
+.grouphead {
+  font-size: 11.5px; font-weight: 700; letter-spacing: .6px;
+  text-transform: uppercase; color: var(--muted); margin: 18px 0 0;
+}
+.orline {
+  display: flex; align-items: center; gap: 10px; color: var(--muted);
+  font-size: 12.5px; margin: 16px 0 4px;
+}
+.orline::before, .orline::after {
+  content: ""; flex: 1; border-top: 1px solid var(--border);
+}
