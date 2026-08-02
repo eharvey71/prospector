@@ -107,6 +107,22 @@ async def fetch_resume(uid: str, display_name: str,
         return None
 
 
+async def mark_submit_clicked(uid: str, app_id: str) -> None:
+    """Record — BEFORE clicking a real Submit button — that this application
+    has been filed. If the worker then crashes or times out, the retried
+    delivery sees this marker and escalates instead of submitting again.
+    Best-effort by necessity, but the click is the point of no return, so
+    this write happens first."""
+    try:
+        from google.cloud import firestore
+        (firestore.Client().collection("users").document(uid)
+         .collection("applications").document(app_id)
+         .update({"submission.submitClickedAt": datetime.now(timezone.utc)}))
+    except Exception:
+        log.exception("could not record submit-click marker uid=%s app=%s",
+                      uid, app_id)
+
+
 async def take_screenshot(page, uid: str, app_id: str, label: str) -> str:
     ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
     storage_path = f"users/{uid}/screenshots/{app_id}/{ts}_{label}.png"

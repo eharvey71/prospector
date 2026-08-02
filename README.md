@@ -146,7 +146,13 @@ npm run deploy               # build + firebase deploy --only hosting
       the `pre_submit` screenshot in Storage, confirm every field is right.
 - [ ] Verify the escalation path: approve a posting with custom required
       questions and confirm it lands in `needs_human` instead of guessing.
-- [ ] Only then flip `SUBMIT_DRY_RUN=false` on the Cloud Run service.
+- [x] Flip `SUBMIT_DRY_RUN=false` on the Cloud Run service to go live:
+      `gcloud run services update job-engine-worker --region us-central1 \
+        --update-env-vars SUBMIT_DRY_RUN=false`
+      Back to safe: same command with `SUBMIT_DRY_RUN=true`.
+      Live-mode guarantee: an application whose Submit button was
+      clicked is never submitted again — the adapter records the click
+      first, and any uncertainty afterwards escalates to needs_human.
 - [ ] Keep queue rate limits low (the defaults above are ~1 submission / 5s
       max, 1 at a time). You are applying as yourself; behave like yourself.
 

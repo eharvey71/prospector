@@ -29,6 +29,7 @@ from .common import (
     DRY_RUN,
     decide_standard_answer,
     fetch_resume,
+    mark_submit_clicked,
     option_matches,
     take_screenshot,
 )
@@ -157,6 +158,8 @@ class LeverAdapter(SubmissionAdapter):
                                "(set SUBMIT_DRY_RUN=false to go live)",
                     )
 
+                # Point of no return: record the click BEFORE making it.
+                await mark_submit_clicked(uid, app_id)
                 await page.locator(
                     "#btn-submit, button[type='submit'], input[type='submit']"
                 ).first.click()
@@ -171,10 +174,13 @@ class LeverAdapter(SubmissionAdapter):
                 shots.append(await take_screenshot(page, uid, app_id, "post_submit"))
 
                 if confirmed:
-                    return SubmissionOutcome(success=True, tier=self.tier, screenshots=shots)
+                    return SubmissionOutcome(success=True, tier=self.tier,
+                                             clicked_submit=True, screenshots=shots)
                 return SubmissionOutcome(
-                    success=False, tier=self.tier, screenshots=shots,
-                    reason="submitted but no confirmation found",
+                    success=False, tier=self.tier, escalate=True,
+                    clicked_submit=True, screenshots=shots,
+                    reason="submitted, but no confirmation message was found — "
+                           "check the screenshot and your email before resubmitting",
                 )
             finally:
                 await browser.close()

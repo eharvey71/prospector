@@ -28,6 +28,7 @@ from .common import (
     DRY_RUN,
     decide_standard_answer,
     fetch_resume,
+    mark_submit_clicked,
     option_matches,
     take_screenshot,
 )
@@ -135,6 +136,8 @@ class GreenhouseAdapter(SubmissionAdapter):
                                "(set SUBMIT_DRY_RUN=false to go live)",
                     )
 
+                # Point of no return: record the click BEFORE making it.
+                await mark_submit_clicked(uid, app_id)
                 await page.locator(
                     "button[type='submit'], input[type='submit'], #submit_app"
                 ).first.click()
@@ -146,10 +149,16 @@ class GreenhouseAdapter(SubmissionAdapter):
                 shots.append(await take_screenshot(page, uid, app_id, "post_submit"))
 
                 if confirmed:
-                    return SubmissionOutcome(success=True, tier=self.tier, screenshots=shots)
+                    return SubmissionOutcome(success=True, tier=self.tier,
+                                             clicked_submit=True, screenshots=shots)
+                # Submitted, but the page didn't say so in words we know.
+                # clicked_submit stops the worker retrying (which would file
+                # the application a second time) — a human verifies instead.
                 return SubmissionOutcome(
-                    success=False, tier=self.tier, screenshots=shots,
-                    reason="submitted but no confirmation text found",
+                    success=False, tier=self.tier, escalate=True,
+                    clicked_submit=True, screenshots=shots,
+                    reason="submitted, but no confirmation message was found — "
+                           "check the screenshot and your email before resubmitting",
                 )
             finally:
                 await browser.close()

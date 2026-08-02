@@ -13,7 +13,10 @@ idempotent). Human transitions (approve/reject) enforced in firestore.rules.
   (vendored copies in functions/ and worker/ are gitignored).
 - Worker deploys FROM worker/ dir: gcloud run deploy job-engine-worker
   --source . --region us-central1 (plus env vars; see README).
-- SUBMIT_DRY_RUN=true until explicitly decided otherwise.
+- SUBMIT_DRY_RUN gates real submissions. Live as of 2026-08 (user
+  decision). A submission that has clicked Submit is NEVER retried:
+  adapters call mark_submit_clicked() before the click and the worker
+  escalates on any post-click uncertainty. Never weaken that.
 - Adapter contract: escalate over guess. Never pick a form option without
   post-selection verification (see v2.2 sponsorship incident in git history).
 - Playwright version in requirements.txt must exactly match the Docker base

@@ -75,6 +75,21 @@ async def submit(request: Request) -> dict:
         .collection("applications").document(task.app_id)
     )
     app_data = app_ref.get().to_dict() or {}
+
+    # Hard stop: this application already had a real Submit click (recorded
+    # by the adapter immediately before clicking). A crash, timeout, or
+    # queue redelivery must never file it a second time.
+    clicked_at = (app_data.get("submission") or {}).get("submitClickedAt")
+    if clicked_at:
+        log.warning("app %s already submitted at %s; refusing to resubmit",
+                    task.app_id, clicked_at)
+        _escalate(task,
+                  f"already submitted once ({clicked_at}) but the result was "
+                  f"never confirmed — check your email before applying again; "
+                  f"the engine will not resubmit",
+                  screenshots=(app_data.get("submission") or {}).get("screenshots"))
+        return {"status": "needs_human"}
+
     user_data = db.collection("users").document(task.uid).get().to_dict() or {}
     posting = db.collection("jobPostings").document(task.posting_id).get().to_dict() or {}
 
@@ -100,16 +115,18 @@ async def submit(request: Request) -> dict:
     if outcome.success:
         advance(db, task.uid, task.app_id, AppState.SUBMITTING, AppState.SUBMITTED,
                 note="confirmed by adapter",
-                extra_fields={"submission": {
-                    "tier": outcome.tier,
-                    "attempts": attempts,
-                    "screenshots": outcome.screenshots,
-                    "confirmedAt": datetime.now(timezone.utc),
-                    "error": None,
-                }})
+                extra_fields={
+                    "submission.tier": outcome.tier,
+                    "submission.attempts": attempts,
+                    "submission.screenshots": outcome.screenshots,
+                    "submission.confirmedAt": datetime.now(timezone.utc),
+                    "submission.error": None,
+                })
         return {"status": "submitted"}
 
-    if outcome.escalate or attempts >= MAX_ATTEMPTS:
+    # clicked_submit is decisive: once the form was actually submitted, a
+    # retry would file it again, so it escalates no matter what else says.
+    if outcome.clicked_submit or outcome.escalate or attempts >= MAX_ATTEMPTS:
         _escalate(task, outcome.reason or "adapter escalated", attempts,
                   outcome.screenshots, outcome.fill_sheet)
         return {"status": "needs_human"}
@@ -122,13 +139,17 @@ def _escalate(task: SubmitTask, reason: str, attempts: int = 0,
               screenshots: list[str] | None = None,
               fill_sheet: list[dict] | None = None) -> None:
     assert db is not None
+    # Dotted paths, not a whole "submission" map: replacing the map would
+    # erase submitClickedAt, the marker that prevents a second filing.
     advance(db, task.uid, task.app_id, AppState.SUBMITTING, AppState.NEEDS_HUMAN,
             note=reason,
-            extra_fields={"submission": {
-                "tier": 3, "attempts": attempts,
-                "screenshots": screenshots or [], "error": reason,
-                "fill_sheet": fill_sheet or [],
-            }})
+            extra_fields={
+                "submission.tier": 3,
+                "submission.attempts": attempts,
+                "submission.screenshots": screenshots or [],
+                "submission.error": reason,
+                "submission.fill_sheet": fill_sheet or [],
+            })
 
 
 def _fail(task: SubmitTask, attempts: int, reason: str) -> None:
