@@ -39,6 +39,7 @@ const PAGES = [
   { href: "/", title: "Queue" },
   { href: "/profile", title: "Profile" },
   { href: "/settings", title: "Settings" },
+  { href: "/extension", title: "Extension" },
 ];
 
 export function Nav({ active }) {

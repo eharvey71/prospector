@@ -508,9 +508,9 @@ export default function ReviewQueue() {
       if (acked) {
         window.open(p.url, "_blank");
       } else {
-        setAddStatus("Autofill extension not detected — install it once from "
-          + "the repo's web-extension folder (see its README), or use the "
-          + "plain 'Open posting' link and the answers on the card.");
+        setAddStatus("Autofill extension not detected — install it from the "
+          + "Extension page (top nav), or use the 'Open posting' link and the "
+          + "answers on this card.");
       }
     }, 600);
   }
