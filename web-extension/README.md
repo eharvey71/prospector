@@ -25,11 +25,30 @@ click Submit yourself — so captchas and login walls don't matter.
 5. Attach your resume by hand (browsers don't let extensions pick files)
 6. Click the page's own **Submit**, then **Mark submitted** back on the queue page
 
+If you reach the form by clicking through several pages (LinkedIn → the
+company's careers page → their ATS, three domains later), the panel won't
+appear on its own — it only auto-shows on the job's own domain. **Click the
+toolbar button to summon it** on whatever page you've landed on.
+
 ### 2. Send any job you're browsing into the pipeline
 
 Click the extension's **toolbar icon** on any job page — LinkedIn, Indeed, a
 company careers page, anywhere. The queue opens with that URL and adds it
 automatically: matched, scored, and drafted like any other job.
+
+### What the toolbar button does
+
+It does whichever of the two makes sense:
+
+| Situation | Click does |
+|---|---|
+| A job is loaded (blue dot on the icon) | Shows the autofill panel on this page |
+| No job loaded | Sends this page to your queue |
+
+Either action is always available explicitly by **right-clicking the page**:
+*Fill this form with Job Engine* / *Add this job to Job Engine*. Clear the
+loaded job with the panel's "Done with this job" button when you're finished
+— the dot disappears and the button goes back to adding jobs.
 
 For LinkedIn postings the engine follows the "Apply on company website" link
 to the employer's own application page when there is one, so submission can

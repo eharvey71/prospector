@@ -111,6 +111,13 @@ export default function ExtensionPage() {
         <summary>What it can and can&apos;t do</summary>
         <div className="panelbody">
           <ul style={{ lineHeight: 1.9, paddingLeft: 20 }}>
+            <li><strong>The toolbar button does whichever thing fits:</strong> when
+                a job is loaded (blue dot on the icon) it shows the autofill
+                panel on the page you&apos;re on — use it when you&apos;ve clicked
+                through from LinkedIn to a careers page to the actual form and
+                the panel didn&apos;t follow. With no job loaded, it sends the
+                current page to your queue. Right-click the page to pick either
+                one explicitly.</li>
             <li><strong>Fills</strong> text fields and simple dropdowns, including
                 forms embedded in a frame inside a company&apos;s page.</li>
             <li><strong>Copies</strong> — everything else gets a copy button:

@@ -1,9 +1,14 @@
 // Runs in EVERY frame (all_frames). The panel lives in the top frame; the
 // actual application form very often lives in an embedded ATS iframe
-// (a Greenhouse form inside a company's careers page) — which is exactly
-// why filling used to find zero fields. "Fill this form" now fills the top
-// frame AND broadcasts into every child frame; frame scripts fill their own
-// documents and report counts back. Nothing is ever submitted.
+// (a Greenhouse form inside a company's careers page), so "Fill this form"
+// fills the top frame AND broadcasts into every child frame. Nothing is
+// ever submitted.
+//
+// The panel appears two ways:
+//   - automatically, when the page's domain matches the loaded job
+//   - on demand, when the toolbar button or right-click menu asks for it —
+//     for applications you reach by clicking through two or three domains
+//     (LinkedIn -> careers page -> the ATS), where no auto-match happens.
 
 (function () {
   const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -107,8 +112,7 @@
   }
 
   // ------------------------------------------------------------------
-  // Child frames: no UI. Fill on request from the top-frame panel (the
-  // user clicked — explicit intent, so no host check here).
+  // Child frames: no UI. Fill on request from the top-frame panel.
   // ------------------------------------------------------------------
   if (window !== window.top) {
     window.addEventListener("message", async (ev) => {
@@ -124,32 +128,32 @@
   }
 
   // ------------------------------------------------------------------
-  // Top frame: panel.
+  // Top frame: the panel.
   // ------------------------------------------------------------------
-  (async function () {
-    const { pending } = await chrome.storage.local.get("pending");
-    if (!pending || !pending.url) return;
-    let targetHost;
-    try { targetHost = new URL(pending.url).hostname; } catch { return; }
-    const tail = (h) => h.split(".").slice(-2).join(".");
-    if (tail(location.hostname) !== tail(targetHost)) {
-      console.log(`[job-engine] autofill payload is for ${targetHost}; this is`
-        + ` ${location.hostname} — panel not shown`);
-      return;
-    }
+  const P = { bg: "#1d2026", alt: "#23262d", border: "#2f343c", text: "#e2e4e9",
+              muted: "#9aa1ad", accent: "#6f9ff3", warn: "#e0b34c" };
+  let panel = null;
+  let keepAlive = null;
 
-    const P = { bg: "#1d2026", alt: "#23262d", border: "#2f343c", text: "#e2e4e9",
-                muted: "#9aa1ad", accent: "#6f9ff3", warn: "#e0b34c" };
-    const panel = document.createElement("div");
+  function dismiss() {
+    clearInterval(keepAlive);
+    keepAlive = null;
+    panel?.remove();
+    panel = null;
+  }
+
+  function showPanel(pending) {
+    dismiss();   // a fresh summon always rebuilds
+
+    panel = document.createElement("div");
     panel.style.cssText = `position:fixed;top:16px;right:16px;width:320px;max-height:80vh;
       overflow-y:auto;z-index:2147483647;background:${P.bg};color:${P.text};
       border:1px solid ${P.border};border-radius:10px;padding:14px;
       font:13px/1.45 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.5)`;
 
-    let keepAlive = null;
-    const dismiss = () => { clearInterval(keepAlive); panel.remove(); };
+    // SPA pages re-render aggressively and can sweep the panel out.
     keepAlive = setInterval(() => {
-      if (!document.documentElement.contains(panel)) {
+      if (panel && !document.documentElement.contains(panel)) {
         (document.body || document.documentElement).append(panel);
       }
     }, 800);
@@ -186,6 +190,19 @@
     const sub = document.createElement("div");
     sub.textContent = `${pending.title || ""} @ ${pending.company || ""}`;
     sub.style.cssText = `color:${P.muted};margin:2px 0 10px`;
+    panel.append(close, h, sub);
+
+    // Clicked through to a different site than the job's own URL? Say so,
+    // so nobody wonders whether these answers belong to this page.
+    try {
+      const tail = (u) => new URL(u).hostname.split(".").slice(-2).join(".");
+      if (tail(pending.url) !== tail(location.href)) {
+        const note = document.createElement("div");
+        note.textContent = `Answers loaded from ${tail(pending.url)} — check they suit this form.`;
+        note.style.cssText = `color:${P.warn};font-size:11.5px;margin:-6px 0 10px`;
+        panel.append(note);
+      }
+    } catch { /* unparseable URL — skip the note */ }
 
     const fillBtn = document.createElement("button");
     fillBtn.textContent = "Fill this form";
@@ -197,8 +214,13 @@
     fillBtn.onclick = () => {
       const { count, filledKeys } = fillAll(pending);
       let frameCount = 0;
-      // Ask every embedded frame to fill its own document too — the real
-      // form is usually in one of them.
+      const render = () => {
+        const total = count + frameCount;
+        status.textContent = `Filled ${total} field${total === 1 ? "" : "s"}`
+          + (frameCount ? ` (${frameCount} in the embedded form)` : "")
+          + ` — review everything, attach your resume by hand, then click the`
+          + ` page's own Submit.`;
+      };
       const collect = (ev) => {
         if (ev.data?.type !== "JOB_ENGINE_FILL_RESULT") return;
         frameCount += ev.data.count || 0;
@@ -207,17 +229,9 @@
       window.addEventListener("message", collect);
       for (const f of document.querySelectorAll("iframe")) {
         try { f.contentWindow.postMessage({ type: "JOB_ENGINE_FILL" }, "*"); }
-        catch { /* cross-origin access to contentWindow is fine; ignore rest */ }
+        catch { /* cross-origin contentWindow access — ignore */ }
       }
       setTimeout(() => window.removeEventListener("message", collect), 3000);
-
-      const render = () => {
-        const total = count + frameCount;
-        status.textContent = `Filled ${total} field${total === 1 ? "" : "s"}`
-          + (frameCount ? ` (${frameCount} in the embedded form)` : "")
-          + ` — review everything, attach your resume by hand, then click the`
-          + ` page's own Submit.`;
-      };
       render();
       for (const r of rowRegistry) {
         if (filledKeys.has(r.key) && !r.name.textContent.startsWith("✓")) {
@@ -227,7 +241,7 @@
       }
     };
 
-    panel.append(close, h, sub, fillBtn, status);
+    panel.append(fillBtn, status);
 
     if (pending.resumeUrl) {
       const rl = document.createElement("a");
@@ -276,11 +290,36 @@
     clear.textContent = "Done with this job (clear)";
     clear.style.cssText = `width:100%;margin-top:10px;padding:6px;background:none;
       border:1px solid ${P.border};color:${P.muted};border-radius:6px;cursor:pointer`;
-    clear.onclick = () => {
-      chrome.runtime.sendMessage({ kind: "clear" }, dismiss);
-    };
+    clear.onclick = () => chrome.runtime.sendMessage({ kind: "clear" }, dismiss);
     panel.append(clear);
 
     (document.body || document.documentElement).append(panel);
+  }
+
+  // Summoned explicitly (toolbar button / right-click): no domain check —
+  // the click IS the intent, and the whole point is pages we couldn't have
+  // matched automatically.
+  chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
+    if (msg?.kind !== "show_panel") return;
+    chrome.storage.local.get("pending").then(({ pending }) => {
+      if (pending?.url) showPanel(pending);
+      respond({ shown: !!pending?.url });
+    });
+    return true;   // async respond
+  });
+
+  // Automatic appearance on the job's own site.
+  (async function () {
+    const { pending } = await chrome.storage.local.get("pending");
+    if (!pending || !pending.url) return;
+    let targetHost;
+    try { targetHost = new URL(pending.url).hostname; } catch { return; }
+    const tail = (h) => h.split(".").slice(-2).join(".");
+    if (tail(location.hostname) !== tail(targetHost)) {
+      console.log(`[job-engine] autofill payload is for ${targetHost}; this is`
+        + ` ${location.hostname} — click the toolbar button to show it here`);
+      return;
+    }
+    showPanel(pending);
   })();
 })();
