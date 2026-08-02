@@ -25,7 +25,9 @@ from playwright.async_api import async_playwright
 from pydantic import BaseModel, Field
 
 from .base import SubmissionAdapter, SubmissionOutcome
-from .common import DRY_RUN, fetch_resume, mark_submit_clicked, take_screenshot
+from .common import (DRY_RUN, fetch_resume, find_submit_button,
+                     mark_submit_clicked, take_screenshot,
+                     unmark_submit_clicked)
 
 log = logging.getLogger("adapter.agentic")
 
@@ -246,10 +248,23 @@ class AgenticAdapter(SubmissionAdapter):
                                "(set SUBMIT_DRY_RUN=false to go live)",
                     )
 
-                # Point of no return: record the click BEFORE making it.
+                submit_btn = await find_submit_button(page, [])
+                if submit_btn is None:
+                    shots.append(await take_screenshot(page, uid, app_id, "no_submit_button"))
+                    return SubmissionOutcome(
+                        success=False, tier=self.tier, escalate=True,
+                        screenshots=shots,
+                        reason="filled the form but could not identify this's "
+                               "Submit button — finish it by hand",
+                    )
+                # Point of no return: record the click BEFORE making it, then
+                # undo the record if the click provably didn't happen.
                 await mark_submit_clicked(uid, app_id)
-                await page.locator(
-                    "button[type='submit'], input[type='submit']").first.click()
+                try:
+                    await submit_btn.click()
+                except Exception:
+                    await unmark_submit_clicked(uid, app_id)
+                    raise
                 await page.wait_for_load_state("networkidle", timeout=30_000)
                 confirmed = await page.locator(
                     "text=/thank you|application.*(submitted|received)/i"

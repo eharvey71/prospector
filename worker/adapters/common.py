@@ -107,6 +107,53 @@ async def fetch_resume(uid: str, display_name: str,
         return None
 
 
+SUBMIT_TEXT = re.compile(r"\bsubmit\b|\bsend application\b|\bapply\b", re.I)
+
+
+async def find_submit_button(page, preferred: list[str]):
+    """The form's real submit control, or None.
+
+    A selector list like "button[type=submit], #submit_app" does NOT try
+    them in order — .first is first in DOM ORDER, so a cookie banner or
+    newsletter button earlier on the page wins. This walks explicit
+    priorities instead: the ATS's known id, then a visible submit-type
+    button whose text actually says submit/apply, then any visible
+    submit-type button.
+    """
+    for sel in preferred:
+        loc = page.locator(sel).first
+        if await loc.count() > 0 and await loc.is_visible():
+            return loc
+    for sel in ("button[type='submit']", "input[type='submit']"):
+        loc = page.locator(sel)
+        for i in range(min(await loc.count(), 20)):
+            b = loc.nth(i)
+            if not await b.is_visible():
+                continue
+            label = ((await b.text_content()) or "") + " " \
+                + ((await b.get_attribute("value")) or "")
+            if SUBMIT_TEXT.search(label):
+                return b
+    for sel in ("button[type='submit']", "input[type='submit']"):
+        loc = page.locator(sel).first
+        if await loc.count() > 0 and await loc.is_visible():
+            return loc
+    return None
+
+
+async def unmark_submit_clicked(uid: str, app_id: str) -> None:
+    """Undo the marker when the click provably did NOT happen (Playwright
+    raises rather than clicking blind), so the job stays safely retryable."""
+    try:
+        from google.cloud import firestore
+        (firestore.Client().collection("users").document(uid)
+         .collection("applications").document(app_id)
+         .update({"submission.submitClickedAt": firestore.DELETE_FIELD}))
+    except Exception:
+        log.exception("could not clear submit-click marker uid=%s app=%s",
+                      uid, app_id)
+
+
 async def mark_submit_clicked(uid: str, app_id: str) -> None:
     """Record — BEFORE clicking a real Submit button — that this application
     has been filed. If the worker then crashes or times out, the retried

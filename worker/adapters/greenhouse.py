@@ -28,7 +28,9 @@ from .common import (
     DRY_RUN,
     decide_standard_answer,
     fetch_resume,
+    find_submit_button,
     mark_submit_clicked,
+    unmark_submit_clicked,
     option_matches,
     take_screenshot,
 )
@@ -136,11 +138,23 @@ class GreenhouseAdapter(SubmissionAdapter):
                                "(set SUBMIT_DRY_RUN=false to go live)",
                     )
 
-                # Point of no return: record the click BEFORE making it.
+                submit_btn = await find_submit_button(page, ["#submit_app"])
+                if submit_btn is None:
+                    shots.append(await take_screenshot(page, uid, app_id, "no_submit_button"))
+                    return SubmissionOutcome(
+                        success=False, tier=self.tier, escalate=True,
+                        screenshots=shots,
+                        reason="filled the form but could not identify Greenhouse's "
+                               "Submit button — finish it by hand",
+                    )
+                # Point of no return: record the click BEFORE making it, then
+                # undo the record if the click provably didn't happen.
                 await mark_submit_clicked(uid, app_id)
-                await page.locator(
-                    "button[type='submit'], input[type='submit'], #submit_app"
-                ).first.click()
+                try:
+                    await submit_btn.click()
+                except Exception:
+                    await unmark_submit_clicked(uid, app_id)
+                    raise
                 await page.wait_for_load_state("networkidle", timeout=30_000)
 
                 confirmed = await page.locator(
