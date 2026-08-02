@@ -373,18 +373,32 @@ export default function ReviewQueue() {
     }
   }, [matches, apps, escalated]);
 
-  async function addJob() {
-    if (!jobUrl.trim()) return;
+  async function addJob(urlArg) {
+    const url = (urlArg ?? jobUrl).trim();
+    if (!url) return;
     setAddStatus("Reading the posting… (up to a minute)");
     try {
       const call = httpsCallable(functions, "add_job_url", { timeout: 300_000 });
-      const res = await call({ url: jobUrl.trim() });
+      const res = await call({ url });
       setAddStatus(`Added: ${res.data.title} @ ${res.data.company} — drafting now; it will appear in Review when ready`);
       setJobUrl("");
     } catch (e) {
       setAddStatus(`Couldn't add it: ${e.message}`);
     }
   }
+
+  // The extension's toolbar button opens /?add=<job url> — auto-submit it
+  // once, then scrub the query string so a refresh can't double-add.
+  const addParamHandled = useRef(false);
+  useEffect(() => {
+    if (!user || addParamHandled.current) return;
+    const url = new URLSearchParams(window.location.search).get("add");
+    if (!url) return;
+    addParamHandled.current = true;
+    window.history.replaceState({}, "", window.location.pathname);
+    setJobUrl(url);
+    addJob(url);
+  }, [user]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function writeLetter(appId) {
     setDraftingIds(ids => [...ids, appId]);

@@ -11,8 +11,9 @@ from __future__ import annotations
 
 import logging
 import re
+from html import unescape
 from typing import Optional
-from urllib.parse import urljoin
+from urllib.parse import parse_qs, urljoin, urlparse
 
 import httpx
 from pydantic import BaseModel
@@ -67,6 +68,65 @@ def _follow_iframes(client_url: str, html: str, text: str) -> str:
     return text
 
 
+LINKEDIN_GUEST = ("https://www.linkedin.com/jobs-guest/jobs/api/"
+                  "jobPosting/{job_id}")
+# Browser UA: the guest endpoints 403 a bot-looking agent.
+BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+              "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36")
+
+
+def linkedin_job_id(url: str) -> Optional[str]:
+    """The numeric posting id from any LinkedIn job URL shape."""
+    m = re.search(r"linkedin\.com/jobs/view/(?:[^/?#]*-)?(\d{6,})", url)
+    if m:
+        return m.group(1)
+    m = re.search(r"[?&]currentJobId=(\d{6,})", url)
+    return m.group(1) if m else None
+
+
+def resolve_linkedin(url: str) -> tuple[str, str]:
+    """LinkedIn posting URL -> (best_url, description_text).
+
+    LinkedIn has no public API, but the logged-out "guest" job endpoint
+    serves the posting as plain HTML. Most listings carry an "Apply on
+    company website" offsite link — that's the employer's real ATS page,
+    which is where we'd rather send the pipeline (Tier 1 territory).
+    Returns the original URL unchanged when nothing better is found.
+    """
+    job_id = linkedin_job_id(url)
+    if not job_id:
+        return url, ""
+    try:
+        resp = httpx.get(LINKEDIN_GUEST.format(job_id=job_id),
+                         timeout=HTTP_TIMEOUT, follow_redirects=True,
+                         headers={"User-Agent": BROWSER_UA})
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        log.warning("linkedin guest fetch %s failed: %s", job_id, exc)
+        return url, ""
+
+    html = resp.text
+    text = _strip_html(html)[:20_000]
+
+    # The offsite apply link is served through a LinkedIn redirect wrapper;
+    # the real destination is the url= parameter.
+    m = re.search(r'href="(https://www\.linkedin\.com/jobs/view/externalApply/[^"]+)"', html)
+    if m:
+        wrapper = unescape(m.group(1))
+        target = parse_qs(urlparse(wrapper).query).get("url", [None])[0]
+        if target and target.startswith("http"):
+            log.info("linkedin %s -> external apply %s", job_id, target[:120])
+            return target, text
+    # Some listings embed the destination directly.
+    m = re.search(r'"companyApplyUrl":"(https:[^"]+)"', html)
+    if m:
+        target = m.group(1).encode().decode("unicode_escape")
+        log.info("linkedin %s -> companyApplyUrl %s", job_id, target[:120])
+        return target, text
+    log.info("linkedin %s: no offsite apply link (Easy Apply only)", job_id)
+    return url, text
+
+
 def _infer_source(url: str) -> AtsType:
     """Hosted Greenhouse/Lever postings get their Tier-1 adapter even when
     found via a career page or pasted by hand."""
@@ -81,6 +141,19 @@ def _infer_source(url: str) -> AtsType:
 def create_posting_from_url(db, url: str) -> tuple[str, dict]:
     """Fetch, extract, upsert. Returns (posting_id, posting_dict).
     Raises ValueError with a user-facing message on fetch problems."""
+    # LinkedIn (and other aggregators) are indexes, not application
+    # destinations: follow through to the employer's own ATS page when the
+    # listing offers one, so submission lands in Tier 1 instead of Tier 2.
+    linkedin_text = ""
+    if "linkedin.com/jobs" in url:
+        resolved, linkedin_text = resolve_linkedin(url)
+        if resolved != url:
+            url = resolved
+        elif linkedin_text and len(linkedin_text) > 400:
+            # Easy-Apply-only listing: keep LinkedIn's own description
+            # rather than failing, and let the human apply there.
+            return _upsert_from_text(db, url, linkedin_text)
+
     try:
         resp = httpx.get(url, timeout=HTTP_TIMEOUT, follow_redirects=True,
                          headers={"User-Agent": "job-engine/0.1"})
@@ -97,7 +170,12 @@ def create_posting_from_url(db, url: str) -> tuple[str, dict]:
             "JavaScript) — the engine can't read it; apply manually or "
             "paste a different URL for the same job")
 
-    page_title = _page_title(resp.text)
+    return _upsert_from_text(db, url, text, page_title=_page_title(resp.text))
+
+
+def _upsert_from_text(db, url: str, text: str,
+                      page_title: Optional[str] = None) -> tuple[str, dict]:
+    """Extract facts from posting text and upsert the posting."""
     facts = generate_structured(
         (f"Page <title> tag: {page_title}\n\n" if page_title else "")
         + f"Job posting page text:\n\n{text[:8000]}",

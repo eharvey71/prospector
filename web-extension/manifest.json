@@ -1,9 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Job Engine Autofill",
-  "version": "0.1.0",
-  "description": "Fills job application forms with your prepared answers from Job Engine. Data comes from your own review queue; nothing is submitted automatically.",
-  "permissions": ["storage"],
+  "version": "0.2.0",
+  "description": "Fills job application forms with your prepared answers from Job Engine, and sends any job page into the pipeline. Nothing is submitted automatically.",
+  "permissions": ["storage", "activeTab"],
+  "action": {
+    "default_title": "Send this job to Job Engine"
+  },
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
@@ -13,6 +16,7 @@
     {
       "matches": ["<all_urls>"],
       "js": ["fill.js"],
+      "all_frames": true,
       "run_at": "document_idle"
     }
   ]

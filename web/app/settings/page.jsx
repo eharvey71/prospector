@@ -31,6 +31,7 @@ export default function SettingsPage() {
   const [ashbyBoards, setAshbyBoards] = useState("");
   const [srBoards, setSrBoards] = useState("");       // smartrecruiters ids
   const [workableBoards, setWorkableBoards] = useState("");
+  const [linkedinSearches, setLinkedinSearches] = useState("");
   const [suggestRole, setSuggestRole] = useState("");
   const [suggesting, setSuggesting] = useState(false);
   const [suggestions, setSuggestions] = useState([]); // verified boards
@@ -65,6 +66,7 @@ export default function SettingsPage() {
         setAshbyBoards((wl.data().ashby || []).join(", "));
         setSrBoards((wl.data().smartrecruiters || []).join(", "));
         setWorkableBoards((wl.data().workable || []).join(", "));
+        setLinkedinSearches((wl.data().linkedin || []).join(", "));
       }
     })();
   }, [user]);
@@ -94,6 +96,7 @@ export default function SettingsPage() {
       ashby: csv(ashbyBoards),
       smartrecruiters: csv(srBoards),
       workable: csv(workableBoards),
+      linkedin: csv(linkedinSearches),
     });
     setStatus("Saved ✓");
     setTimeout(() => setStatus(""), 2500);
@@ -118,6 +121,7 @@ export default function SettingsPage() {
         setAshbyBoards((wl.data().ashby || []).join(", "));
         setSrBoards((wl.data().smartrecruiters || []).join(", "));
         setWorkableBoards((wl.data().workable || []).join(", "));
+        setLinkedinSearches((wl.data().linkedin || []).join(", "));
       }
       setTrackName("");
     } catch (e) {
@@ -314,6 +318,16 @@ export default function SettingsPage() {
           </span>
           <input value={workdaySites} onChange={e => setWorkdaySites(e.target.value)}
                  placeholder="https://company.wd5.myworkdayjobs.com/External" />
+
+          <p className="grouphead">LinkedIn saved searches — jobs found, then followed to the employer&apos;s own site</p>
+          <span className="field-label">
+            Searches, comma-separated. Use &quot;keywords | location&quot; to add a
+            place (e.g. grant writer | Richmond, VA). No LinkedIn account is
+            used — the engine reads the public listings and, where a posting
+            links out to the company&apos;s own application site, follows it there.
+          </span>
+          <input value={linkedinSearches} onChange={e => setLinkedinSearches(e.target.value)}
+                 placeholder="grant writer | Richmond VA, development director | remote" />
 
           <p className="grouphead">Career pages — crawled for job links</p>
           <span className="field-label">
