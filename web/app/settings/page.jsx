@@ -159,7 +159,7 @@ export default function SettingsPage() {
 
   if (!user) {
     return (
-      <main style={{ padding: 40 }}>
+      <main className="container">
         <h1>Settings</h1>
         <button style={btnPrimary} onClick={() => signInWithPopup(auth, googleProvider)}>
           Sign in with Google
@@ -169,7 +169,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <main style={{ padding: "24px 40px 40px", maxWidth: 760, margin: "0 auto" }}>
+    <main className="container">
       <Nav active="/settings" />
       <h1>Settings</h1>
       <p style={{ color: T.muted }}>
@@ -178,8 +178,9 @@ export default function SettingsPage() {
         resume, work history, skills — is on the Profile page.
       </p>
 
-      <section style={box}>
-        <h2>Matching</h2>
+      <details className="panel" open>
+        <summary>Matching</summary>
+        <div className="panelbody">
         <span style={label}>Target titles (comma-separated)</span>
         <input style={input} value={titles} onChange={e => setTitles(e.target.value)} />
         <span style={label}>
@@ -229,10 +230,12 @@ export default function SettingsPage() {
           <input type="checkbox" checked={remoteOnly}
                  onChange={e => setRemoteOnly(e.target.checked)} /> Remote only
         </label>
-      </section>
+      </div>
+      </details>
 
-      <section style={box}>
-        <h2>Company watchlist</h2>
+      <details className="panel">
+        <summary>Company watchlist</summary>
+        <div className="panelbody">
 
         <h3 style={{ marginTop: 0 }}>Track a company by name</h3>
         <p style={{ color: T.muted, fontSize: 13 }}>
@@ -345,9 +348,10 @@ export default function SettingsPage() {
             ))}
           </>
         )}
-      </section>
+      </div>
+      </details>
 
-      <div style={{ position: "sticky", bottom: 0, background: "#15171c", padding: "12px 0" }}>
+      <div className="savebar">
         <button onClick={save} style={{ ...btnPrimary, padding: "10px 24px", fontSize: 16 }}>
           Save settings
         </button>
