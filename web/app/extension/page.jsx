@@ -51,7 +51,11 @@ export default function ExtensionPage() {
       {installed === null && <p className="hint">Checking…</p>}
       {installed === false && (
         <div className="banner" style={{ borderColor: "var(--warn)", color: "var(--warn)" }}>
-          Not installed in this browser yet — follow the steps below.
+          Not responding in this browser. Either it isn&apos;t installed, or
+          it&apos;s an older copy — versions before 0.2.0 can&apos;t report
+          themselves. If you already have it loaded, download below, replace
+          the folder&apos;s contents, and hit the reload icon (↻) on the Job
+          Engine card in <code>chrome://extensions</code>.
         </div>
       )}
       {installed && (

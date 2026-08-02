@@ -503,14 +503,16 @@ export default function ReviewQueue() {
     };
     window.addEventListener("message", onAck);
     window.postMessage({ type: "JOB_ENGINE_AUTOFILL", payload }, "*");
+    // Give the extension a moment to store the payload, then open the
+    // posting REGARDLESS — the user asked to open a job; a missing
+    // extension is a reason to warn, not to do nothing.
     setTimeout(() => {
       window.removeEventListener("message", onAck);
-      if (acked) {
-        window.open(p.url, "_blank");
-      } else {
-        setAddStatus("Autofill extension not detected — install it from the "
-          + "Extension page (top nav), or use the 'Open posting' link and the "
-          + "answers on this card.");
+      window.open(p.url, "_blank");
+      if (!acked) {
+        setAddStatus("Opened the posting, but the autofill extension isn't "
+          + "responding — install or update it from the Extension tab. The "
+          + "answers on this card still work by copy-paste.");
       }
     }, 600);
   }
