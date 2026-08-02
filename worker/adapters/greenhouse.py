@@ -90,7 +90,7 @@ class GreenhouseAdapter(SubmissionAdapter):
                     note("Phone", phone)
 
                 # --- resume: direct input, else Attach button/file chooser ---
-                resume_path = await fetch_resume(uid, name)
+                resume_path = await fetch_resume(uid, name, application.get("resume_path"))
                 if resume_path:
                     if await self._attach_file(page, resume_path, section_hint="resume"):
                         note("Resume", os.path.basename(resume_path))

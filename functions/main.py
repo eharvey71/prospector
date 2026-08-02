@@ -123,15 +123,19 @@ def suggest_companies(req: https_fn.CallableRequest) -> dict:
         db.collection("users").document(req.auth.uid)
         .collection("watchlist").document("companies").get().to_dict() or {}
     )
-    exclude = {s.lower() for s in wl.get("greenhouse", []) + wl.get("lever", [])}
+    exclude = {s.lower() for s in (wl.get("greenhouse", []) + wl.get("lever", [])
+                                   + wl.get("workday", []))}
     profile = db.collection("users").document(req.auth.uid).get().to_dict() or {}
+    prefs = profile.get("preferences") or {}
 
     from suggest import suggest_companies as run_suggest
-    return {"companies": run_suggest(
+    return run_suggest(   # {"companies": [...], "unverified": [...]}
         role, exclude,
         location=profile.get("location") or "",
-        remote_only=bool((profile.get("preferences") or {}).get("remote_only")),
-    )}
+        remote_only=bool(prefs.get("remote_only")),
+        titles=prefs.get("titles") or [],
+        skills=profile.get("skills") or [],
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +228,28 @@ def on_resume_uploaded(event: storage_fn.CloudEvent[storage_fn.StorageObjectData
     # Fires for every object in the default bucket; resume.py filters to
     # users/{uid}/resume.pdf and ignores everything else (e.g. screenshots).
     process_resume_upload(_db(), event.data.bucket, event.data.name)
+
+
+# ---------------------------------------------------------------------------
+# Profile writes -> title-synonym expansion (loop-guarded: the write-back
+# doesn't change titles, so the retrigger no-ops)
+# ---------------------------------------------------------------------------
+
+@firestore_fn.on_document_written(
+    document="users/{uid}", timeout_sec=120,
+    secrets=["ANTHROPIC_API_KEY"],
+)
+def on_user_written(event: firestore_fn.Event) -> None:
+    if event.data is None or event.data.after is None:
+        return
+    after = event.data.after.to_dict()
+    if not after:
+        return
+    from synonyms import maybe_expand_titles
+    try:
+        maybe_expand_titles(_db(), event.params["uid"], after)
+    except Exception:
+        log.exception("title synonym expansion failed uid=%s", event.params["uid"])
 
 
 # ---------------------------------------------------------------------------

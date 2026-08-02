@@ -112,6 +112,17 @@ def track_company(db: firestore.Client, uid: str, name: str) -> dict:
                     return _result(name, "auto", ats, slug,
                                    f"Careers page runs on {ats} — fully automated.")
 
+            # Public-JSON-API ATSes: register the slug; discovery crawls
+            # them and Tier 2 attempts submission.
+            if ats in ("ashby", "smartrecruiters", "workable"):
+                slug = _api_ats_slug(ats_url or "", ats)
+                if slug:
+                    _add_to_watchlist(db, uid, ats, slug)
+                    return _result(name, "auto", ats, slug,
+                                   f"Careers page runs on {ats} — jobs are "
+                                   f"discovered automatically and submission is "
+                                   f"attempted by the Tier 2 assistant.")
+
             # Workday exposes a public JSON API — register the actual
             # myworkdayjobs URL (extracted from the page, not the landing
             # page) so discovery pulls its jobs; submission stays manual.
@@ -174,6 +185,9 @@ def _extract_ats_url(text: str, ats: str) -> str | None:
         "workday": r"https?://[A-Za-z0-9-]+\.[A-Za-z0-9-]+\.myworkdayjobs\.com/[^\s\"'<>\\)]*",
         "greenhouse": r"https?://boards\.greenhouse\.io/[^\s\"'<>\\)]*",
         "lever": r"https?://jobs\.lever\.co/[^\s\"'<>\\)]*",
+        "ashby": r"https?://jobs\.ashbyhq\.com/[^\s\"'<>\\)]*",
+        "smartrecruiters": r"https?://(?:careers|jobs)\.smartrecruiters\.com/[^\s\"'<>\\)]*",
+        "workable": r"https?://apply\.workable\.com/[^\s\"'<>\\)]*",
     }
     pat = pats.get(ats)
     if not pat:
@@ -186,6 +200,21 @@ def _slug_from_url(url: str, ats: str) -> str | None:
     pat = (r"boards\.greenhouse\.io/(?:embed/job_board\?for=)?([a-z0-9-]+)"
            if ats == "greenhouse" else r"jobs\.lever\.co/([a-z0-9-]+)")
     m = re.search(pat, url.lower())
+    return m.group(1) if m else None
+
+
+def _api_ats_slug(url: str, ats: str) -> str | None:
+    """Board slug for the public-JSON-API ATSes (case preserved —
+    SmartRecruiters company ids are case-sensitive)."""
+    pats = {
+        "ashby": r"jobs\.ashbyhq\.com/([A-Za-z0-9%_.-]+)",
+        "smartrecruiters": r"(?:careers|jobs)\.smartrecruiters\.com/([A-Za-z0-9_-]+)",
+        "workable": r"apply\.workable\.com/([A-Za-z0-9-]+)",
+    }
+    pat = pats.get(ats)
+    if not pat:
+        return None
+    m = re.search(pat, url)
     return m.group(1) if m else None
 
 

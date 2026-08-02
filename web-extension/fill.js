@@ -56,6 +56,33 @@
 
   const fieldKey = (s) => norm((s || "").replace(/\(.*?\)/g, ""));
 
+  // Demographic/legal labels never receive generic kit values — "State"
+  // must not fill "Are you a citizen of the United States?". Only an entry
+  // whose own field text is about the same topic may touch them.
+  const SENSITIVE = /citizen|visa|sponsor|veteran|disab|gender|race|ethnic|hispanic|clearance|criminal/;
+  // Same idea for money questions: "State your desired salary" must not
+  // receive the State kit value.
+  const MONEY = /salary|compensation|pay\b|wage/;
+
+  // Word-boundary matching. Substring matching put "Virginia" into a
+  // citizenship question because "...United States?" contains "state".
+  function labelMatches(field, label) {
+    const f = fieldKey(field), l = norm(label);
+    if (!f || !l) return false;
+    if (SENSITIVE.test(l) && !SENSITIVE.test(f)) return false;
+    if (MONEY.test(l) && !MONEY.test(f)) return false;
+    if (f === l) return true;
+    const ft = f.split(" "), lt = l.split(" ");
+    if (ft.every((t) => lt.includes(t))) {
+      // Every field word appears whole in the label. Short noun fields
+      // (City, State, Phone) may only match short labels, never question
+      // sentences; multi-word fields are specific enough on their own.
+      return ft.length >= 3 || lt.length <= 6;
+    }
+    // Last resort for long question-style fields: raw containment.
+    return f.length >= 15 && (l.includes(f) || f.includes(l));
+  }
+
   function fillAll() {
     let count = 0;
     const filledKeys = new Set();
@@ -88,10 +115,7 @@
         if (f.includes(key)) { el = document.querySelector(sel); break; }
       }
       if (!el || el.value) {
-        el = fillables().find((cand) => {
-          const l = norm(labelFor(cand));
-          return l && f && (l.includes(f) || f.includes(l)) && l.length > 3;
-        }) || null;
+        el = fillables().find((cand) => labelMatches(field, labelFor(cand))) || null;
       }
       if (el && !el.value) {
         setValue(el, value); count++; filledKeys.add(f); continue;
@@ -100,8 +124,7 @@
       // Native selects: match by option text.
       for (const sel of document.querySelectorAll("select")) {
         if (sel.offsetParent === null) continue;
-        const l = norm(labelFor(sel));
-        if (!(l.includes(f) || f.includes(l)) || l.length <= 3) continue;
+        if (!labelMatches(field, labelFor(sel))) continue;
         const opt = [...sel.options].find((o) =>
           norm(o.textContent) === norm(value)
           || norm(o.textContent).startsWith(norm(value)));
@@ -189,6 +212,16 @@
   };
 
   panel.append(close, h, sub, fillBtn, status);
+
+  if (pending.resumeUrl) {
+    const rl = document.createElement("a");
+    rl.href = pending.resumeUrl;
+    rl.target = "_blank";
+    rl.rel = "noreferrer";
+    rl.textContent = "Download the tailored resume ↗ — then attach it to the form";
+    rl.style.cssText = `display:block;color:${P.accent};margin-bottom:8px;text-decoration:underline`;
+    panel.append(rl);
+  }
 
   const needs = pending.needs || [];
   const known = needs.filter((e) => e.suggestion);

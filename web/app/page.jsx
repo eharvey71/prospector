@@ -79,6 +79,14 @@ export function MatchInsight({ app, threshold, queue }) {
         }}>
           {score} · {tier.label}
         </span>
+        {m.posting_salary && (
+          <span style={{
+            padding: "2px 10px", borderRadius: 999, fontSize: 13,
+            border: `1px solid ${T.border}`, color: T.ok,
+          }} title="Salary as stated in the posting">
+            {m.posting_salary}
+          </span>
+        )}
         <span style={{ color: T.muted, fontSize: 13 }}>{whyHere}</span>
       </div>
 
@@ -187,6 +195,24 @@ function FillSheet({ sheet }) {
   );
 }
 
+// The per-application tailored resume, as a clickable Storage link.
+function ResumeLink({ path }) {
+  const [url, setUrl] = useState(null);
+  useEffect(() => {
+    if (!path) return;
+    getDownloadURL(storageRef(storage, path)).then(setUrl).catch(() => {});
+  }, [path]);
+  if (!path) return null;
+  return url ? (
+    <a href={url} target="_blank" rel="noreferrer"
+       style={{ color: T.accent, fontSize: 13 }}>
+      Tailored resume for this job ↗
+    </a>
+  ) : (
+    <span style={{ color: T.muted, fontSize: 13 }}>Tailored resume…</span>
+  );
+}
+
 // Storage paths -> clickable links that open the screenshot in a new tab.
 // storage.rules already lets the signed-in owner read users/{uid}/**.
 function ScreenshotLinks({ paths }) {
@@ -248,6 +274,7 @@ export default function ReviewQueue() {
   const [threshold, setThreshold] = useState(70);   // preferences.min_match_score
   const [tab, setTab] = useState("review");
   const [queryError, setQueryError] = useState(""); // surfaced, never swallowed
+  const [funnel, setFunnel] = useState(null);       // stats/funnel counters
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
@@ -261,6 +288,9 @@ export default function ReviewQueue() {
       const t = d.preferences?.min_match_score;
       if (typeof t === "number") setThreshold(t);
     });
+    return onSnapshot(doc(db, "users", user.uid, "stats", "funnel"),
+      (snap) => setFunnel(snap.exists() ? snap.data() : null),
+      () => {});  // stats are optional — never surface their errors
   }, [user]);
 
   useEffect(() => {
@@ -311,7 +341,8 @@ export default function ReviewQueue() {
         const p = snap.data();
         setPostings(prev => ({
           ...prev,
-          [m.posting_id]: { title: p.title, company: p.company, url: p.url },
+          [m.posting_id]: { title: p.title, company: p.company, url: p.url,
+                            active: p.active },
         }));
       }
     });
@@ -322,12 +353,20 @@ export default function ReviewQueue() {
     const p = postings[a.posting_id];
     if (!p) return "…";
     const line = `${p.title} @ ${p.company}`;
+    const closed = p.active === false && (
+      <span style={{ color: T.warn, fontSize: "0.75em", marginLeft: 8 }}>
+        posting may have closed
+      </span>
+    );
     return p.url ? (
-      <a href={p.url} target="_blank" rel="noreferrer"
-         style={{ color: "inherit", textDecoration: "none" }}>
-        {line} <span style={{ color: T.accent, fontSize: "0.8em" }}>↗</span>
-      </a>
-    ) : line;
+      <>
+        <a href={p.url} target="_blank" rel="noreferrer"
+           style={{ color: "inherit", textDecoration: "none" }}>
+          {line} <span style={{ color: T.accent, fontSize: "0.8em" }}>↗</span>
+        </a>
+        {closed}
+      </>
+    ) : <>{line}{closed}</>;
   };
 
   async function addJob() {
@@ -396,9 +435,15 @@ export default function ReviewQueue() {
   // Hand this application's prepared answers to the autofill extension
   // (web-extension/), then open the posting. The extension acks via
   // postMessage; no ack = not installed.
-  function openWithAutofill(a) {
+  async function openWithAutofill(a) {
     const p = postings[a.posting_id];
     if (!p?.url) return;
+    // Extensions can't attach files, but they can hand you the download.
+    let resumeUrl = null;
+    if (a.resume_path) {
+      try { resumeUrl = await getDownloadURL(storageRef(storage, a.resume_path)); }
+      catch { /* fall through — panel just won't show the link */ }
+    }
     const sheet = a.submission?.fill_sheet || [];
     const answers = a.screeningAnswers || {};
     const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
@@ -407,6 +452,7 @@ export default function ReviewQueue() {
     const payload = {
       url: p.url, title: p.title, company: p.company,
       letter: a.letter?.text || "",
+      resumeUrl,
       values: [
         ...sheetFilled,
         ...standardKit(userDoc).filter((e) => !have.has(norm(e.field))),
@@ -514,6 +560,14 @@ export default function ReviewQueue() {
         {addStatus && <p style={{ color: T.muted, marginBottom: 0 }}>{addStatus}</p>}
       </section>
 
+      {funnel && (
+        <p style={{ color: T.muted, fontSize: 13, margin: "0 0 12px" }}
+           title="Where crawled jobs went: seen = evaluated for you; filtered = didn't resemble your titles/skills (no cost); scored = rated by the engine; matched = cleared your bar">
+          Funnel: {funnel.seen || 0} jobs seen · {funnel.prefiltered || 0} filtered
+          out · {funnel.scored || 0} scored · {funnel.matched || 0} matched
+        </p>
+      )}
+
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
         {TABS.map((t) => {
           const active = t.key === tab;
@@ -552,6 +606,7 @@ export default function ReviewQueue() {
               <header>
                 <h2 style={{ margin: "0 0 4px" }}>{jobLine(a)}</h2>
                 <MatchInsight app={a} threshold={threshold} queue="review" />
+                <ResumeLink path={a.resume_path} />
               </header>
               <textarea
                 defaultValue={a.letter?.text || ""}
@@ -593,6 +648,7 @@ export default function ReviewQueue() {
                 </div>
               )}
               <FillSheet sheet={a.submission?.fill_sheet} />
+              <ResumeLink path={a.resume_path} />
               <ScreenshotLinks paths={a.submission?.screenshots} />
               <details style={{ margin: "8px 0" }}>
                 <summary style={{ cursor: "pointer" }}>Cover letter (copy-paste ready)</summary>

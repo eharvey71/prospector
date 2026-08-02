@@ -17,17 +17,24 @@ export default function SettingsPage() {
   const [status, setStatus] = useState("");
 
   const [titles, setTitles] = useState("");           // comma-separated
+  const [titleSynonyms, setTitleSynonyms] = useState(""); // auto-generated, editable
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [excludeCompanies, setExcludeCompanies] = useState("");
   const [minScore, setMinScore] = useState(70);
   const [autoDraft, setAutoDraft] = useState(true);
+  const [salaryStrategy, setSalaryStrategy] = useState("exact");
+  const [tailorResume, setTailorResume] = useState(true);
   const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
   const [leverBoards, setLeverBoards] = useState("");
   const [customPages, setCustomPages] = useState(""); // career page URLs
   const [workdaySites, setWorkdaySites] = useState(""); // myworkdayjobs URLs
+  const [ashbyBoards, setAshbyBoards] = useState("");
+  const [srBoards, setSrBoards] = useState("");       // smartrecruiters ids
+  const [workableBoards, setWorkableBoards] = useState("");
   const [suggestRole, setSuggestRole] = useState("");
   const [suggesting, setSuggesting] = useState(false);
   const [suggestions, setSuggestions] = useState([]); // verified boards
+  const [unverified, setUnverified] = useState([]);   // fits, but no board found
   const [trackName, setTrackName] = useState("");
   const [tracking, setTracking] = useState(false);
   const [trackResults, setTrackResults] = useState([]); // resolution reports
@@ -41,10 +48,13 @@ export default function SettingsPage() {
       if (snap.exists()) {
         const p = snap.data().preferences || {};
         setTitles((p.titles || []).join(", "));
+        setTitleSynonyms((p.title_synonyms || []).join(", "));
         setRemoteOnly(!!p.remote_only);
         setExcludeCompanies((p.exclude_companies || []).join(", "));
         setMinScore(p.min_match_score ?? 70);
         setAutoDraft(p.auto_draft ?? true);
+        setSalaryStrategy(p.salary_strategy || "exact");
+        setTailorResume(p.tailor_resume ?? true);
       }
       const wl = await getDoc(doc(db, "users", user.uid, "watchlist", "companies"));
       if (wl.exists()) {
@@ -52,6 +62,9 @@ export default function SettingsPage() {
         setLeverBoards((wl.data().lever || []).join(", "));
         setCustomPages((wl.data().custom || []).join(", "));
         setWorkdaySites((wl.data().workday || []).join(", "));
+        setAshbyBoards((wl.data().ashby || []).join(", "));
+        setSrBoards((wl.data().smartrecruiters || []).join(", "));
+        setWorkableBoards((wl.data().workable || []).join(", "));
       }
     })();
   }, [user]);
@@ -63,10 +76,13 @@ export default function SettingsPage() {
     await setDoc(doc(db, "users", user.uid), {
       preferences: {
         titles: csv(titles),
+        title_synonyms: csv(titleSynonyms),
         remote_only: remoteOnly,
         exclude_companies: csv(excludeCompanies),
         min_match_score: Number(minScore) || 70,
         auto_draft: autoDraft,
+        salary_strategy: salaryStrategy,
+        tailor_resume: tailorResume,
       },
       updatedAt: serverTimestamp(),
     }, { merge: true });
@@ -75,17 +91,22 @@ export default function SettingsPage() {
       lever: csv(leverBoards),
       custom: csv(customPages),
       workday: csv(workdaySites),
+      ashby: csv(ashbyBoards),
+      smartrecruiters: csv(srBoards),
+      workable: csv(workableBoards),
     });
     setStatus("Saved ✓");
     setTimeout(() => setStatus(""), 2500);
   }
 
-  async function trackCompany() {
-    if (!trackName.trim()) return;
+  async function trackCompany(nameArg) {
+    const name = (nameArg ?? trackName).trim();
+    if (!name) return;
     setTracking(true);
     try {
       const call = httpsCallable(functions, "track_company", { timeout: 120_000 });
-      const res = await call({ name: trackName.trim() });
+      const res = await call({ name });
+      setUnverified(list => list.filter(x => x !== nameArg));
       setTrackResults(prev => [res.data, ...prev]);
       // Reflect the new watchlist entry in the fields below.
       const wl = await getDoc(doc(db, "users", user.uid, "watchlist", "companies"));
@@ -94,6 +115,9 @@ export default function SettingsPage() {
         setLeverBoards((wl.data().lever || []).join(", "));
         setCustomPages((wl.data().custom || []).join(", "));
         setWorkdaySites((wl.data().workday || []).join(", "));
+        setAshbyBoards((wl.data().ashby || []).join(", "));
+        setSrBoards((wl.data().smartrecruiters || []).join(", "));
+        setWorkableBoards((wl.data().workable || []).join(", "));
       }
       setTrackName("");
     } catch (e) {
@@ -107,11 +131,13 @@ export default function SettingsPage() {
     if (!suggestRole.trim()) return;
     setSuggesting(true);
     setSuggestions([]);
+    setUnverified([]);
     try {
       const call = httpsCallable(functions, "suggest_companies", { timeout: 300_000 });
       const res = await call({ role: suggestRole });
       const found = res.data?.companies || [];
       setSuggestions(found);
+      setUnverified(res.data?.unverified || []);
       if (found.length === 0) setStatus("No verified boards found — try rewording the role");
     } catch (e) {
       setStatus(`Suggestion failed: ${e.message}`);
@@ -123,6 +149,8 @@ export default function SettingsPage() {
   function addSuggestion(s) {
     if (s.ats === "greenhouse") {
       setGhBoards(prev => [...new Set([...csv(prev), s.slug])].join(", "));
+    } else if (s.ats === "workday") {
+      setWorkdaySites(prev => [...new Set([...csv(prev), s.slug])].join(", "));
     } else {
       setLeverBoards(prev => [...new Set([...csv(prev), s.slug])].join(", "));
     }
@@ -154,6 +182,13 @@ export default function SettingsPage() {
         <h2>Matching</h2>
         <span style={label}>Target titles (comma-separated)</span>
         <input style={input} value={titles} onChange={e => setTitles(e.target.value)} />
+        <span style={label}>
+          Title synonyms — auto-generated when your titles change; prune
+          freely, anything here widens what counts as a title match
+        </span>
+        <textarea style={{ ...input, height: 70 }} value={titleSynonyms}
+                  onChange={e => setTitleSynonyms(e.target.value)}
+                  placeholder="(generated about a minute after you save new titles)" />
         <span style={label}>Exclude companies (comma-separated)</span>
         <input style={input} value={excludeCompanies} onChange={e => setExcludeCompanies(e.target.value)} />
         <span style={label}>Minimum match score (0-100)</span>
@@ -164,6 +199,26 @@ export default function SettingsPage() {
           With auto-draft ON, each match immediately gets a cover letter
           written (several LLM calls each) — lower this carefully.
         </p>
+        <span style={label}>When a form asks for salary expectations</span>
+        <select style={input} value={salaryStrategy}
+                onChange={e => setSalaryStrategy(e.target.value)}>
+          <option value="exact">State my target exactly</option>
+          <option value="range">Give a range around my target</option>
+          <option value="negotiable">Say it&apos;s negotiable — no number</option>
+        </select>
+        <p style={{ color: T.muted, fontSize: 13, marginTop: -6 }}>
+          A number above the company&apos;s budget can auto-reject you before a
+          human ever looks. A range or &quot;negotiable&quot; keeps you in play;
+          your target itself is set on the Profile page.
+        </p>
+        <label style={{ display: "block", marginBottom: 8 }}>
+          <input type="checkbox" checked={tailorResume}
+                 onChange={e => setTailorResume(e.target.checked)} /> Tailor my
+          resume for each application <span style={{ color: T.muted, fontSize: 13 }}>
+          (a per-job PDF built from your profile facts — reordered and reworded
+          toward the posting, nothing invented. Off: your uploaded resume.pdf
+          goes everywhere.)</span>
+        </label>
         <label style={{ display: "block", marginBottom: 8 }}>
           <input type="checkbox" checked={autoDraft}
                  onChange={e => setAutoDraft(e.target.checked)} /> Draft letters
@@ -181,7 +236,7 @@ export default function SettingsPage() {
 
         <h3 style={{ marginTop: 0 }}>Track a company by name</h3>
         <p style={{ color: T.muted, fontSize: 13 }}>
-          Type a company (e.g. Pearson). The engine finds how they run job
+          Type a company (e.g. Acme Corp). The engine finds how they run job
           applications and sets up what it can — no need to know their ATS.
         </p>
         <div style={{ display: "flex", gap: 8 }}>
@@ -227,6 +282,12 @@ export default function SettingsPage() {
         </span>
         <input style={input} value={workdaySites} onChange={e => setWorkdaySites(e.target.value)}
                placeholder="https://company.wd5.myworkdayjobs.com/External" />
+        <span style={label}>Ashby boards (jobs.ashbyhq.com/SLUG)</span>
+        <input style={input} value={ashbyBoards} onChange={e => setAshbyBoards(e.target.value)} />
+        <span style={label}>SmartRecruiters companies (careers.smartrecruiters.com/COMPANY — case matters)</span>
+        <input style={input} value={srBoards} onChange={e => setSrBoards(e.target.value)} />
+        <span style={label}>Workable boards (apply.workable.com/SLUG)</span>
+        <input style={input} value={workableBoards} onChange={e => setWorkableBoards(e.target.value)} />
 
         <h3 style={{ marginTop: 20 }}>Find companies for me</h3>
         <p style={{ color: T.muted, fontSize: 13 }}>
@@ -236,7 +297,7 @@ export default function SettingsPage() {
         </p>
         <textarea
           style={{ ...input, height: 60 }}
-          placeholder="e.g. solutions engineering roles in ed-tech or AI products, remote-friendly"
+          placeholder="e.g. entry-level marketing coordinator roles at consumer brands, remote-friendly"
           value={suggestRole}
           onChange={e => setSuggestRole(e.target.value)}
         />
@@ -253,6 +314,7 @@ export default function SettingsPage() {
               <strong>{s.company}</strong>{" "}
               <span style={{ color: T.muted, fontSize: 13 }}>
                 {s.ats} · {s.jobs} open roles
+                {s.ats === "workday" && " · found & drafted for you, you submit"}
               </span>
               <div style={{ color: T.muted, fontSize: 12 }}>
                 {(s.sample_titles || []).filter(Boolean).join(" · ")}
@@ -261,6 +323,28 @@ export default function SettingsPage() {
             <button style={btn} onClick={() => addSuggestion(s)}>Add</button>
           </div>
         ))}
+        {unverified.length > 0 && (
+          <>
+            <p style={{ color: T.muted, fontSize: 13, marginTop: 16, marginBottom: 4 }}>
+              Also likely fits, but no supported job board was found
+              automatically. Track resolves each one properly (careers-page
+              detection included):
+            </p>
+            {unverified.map((name) => (
+              <div key={name} style={{
+                display: "flex", alignItems: "center", gap: 12,
+                background: T.panelAlt, border: `1px solid ${T.border}`,
+                borderRadius: 6, padding: "6px 12px", marginTop: 6,
+              }}>
+                <strong style={{ flex: 1 }}>{name}</strong>
+                <button style={btn} disabled={tracking}
+                        onClick={() => trackCompany(name)}>
+                  {tracking ? "…" : "Track"}
+                </button>
+              </div>
+            ))}
+          </>
+        )}
       </section>
 
       <div style={{ position: "sticky", bottom: 0, background: "#15171c", padding: "12px 0" }}>

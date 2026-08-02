@@ -67,6 +67,14 @@ def decide_standard_answer(label: str, location: str, work_auth: str,
         return "No" if us_authorized else None
     if re.search(r"authorized to work|legally.*work", q):
         return "Yes" if us_authorized else None
+    if re.search(r"\bcitizen(ship)?\b", q):
+        # Yes/no citizenship questions only; status dropdowns whose options
+        # don't yes/no-match will fail option matching and escalate safely.
+        if "citizen" in auth:
+            return "Yes"
+        if "green card" in auth or "permanent resident" in auth:
+            return "No"
+        return None
     if re.search(r"\brelocat", q):
         return yes_no(s.get("open_to_relocation"))
     if re.search(r"\bin[\s-]?person\b|\bin[\s-]?office\b|\bon[\s-]?site\b"
@@ -75,13 +83,19 @@ def decide_standard_answer(label: str, location: str, work_auth: str,
     return None
 
 
-async def fetch_resume(uid: str, display_name: str) -> str | None:
-    """Download the resume; attach it under a recruiter-friendly filename."""
+async def fetch_resume(uid: str, display_name: str,
+                       tailored_path: str | None = None) -> str | None:
+    """Download the resume; attach it under a recruiter-friendly filename.
+    Prefers the application's tailored resume when one exists, falling back
+    to the uploaded users/{uid}/resume.pdf."""
     if not BUCKET:
         return None
     try:
         from google.cloud import storage
-        blob = storage.Client().bucket(BUCKET).blob(f"users/{uid}/resume.pdf")
+        bucket = storage.Client().bucket(BUCKET)
+        blob = bucket.blob(tailored_path) if tailored_path else None
+        if blob is None or not blob.exists():
+            blob = bucket.blob(f"users/{uid}/resume.pdf")
         if not blob.exists():
             return None
         nice = re.sub(r"[^A-Za-z0-9]+", "_", display_name).strip("_") or "Candidate"

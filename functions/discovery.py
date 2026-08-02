@@ -39,6 +39,11 @@ log = logging.getLogger("discovery")
 
 GREENHOUSE_URL = "https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true"
 LEVER_URL = "https://api.lever.co/v0/postings/{board}?mode=json"
+ASHBY_URL = "https://api.ashbyhq.com/posting-api/job-board/{board}?includeCompensation=true"
+SMARTRECRUITERS_URL = "https://api.smartrecruiters.com/v1/companies/{board}/postings"
+SMARTRECRUITERS_DETAIL = "https://api.smartrecruiters.com/v1/companies/{board}/postings/{pid}"
+WORKABLE_URL = "https://apply.workable.com/api/v1/widget/accounts/{board}?details=true"
+MAX_DETAIL_FETCHES = 80       # per-board cap on per-job description requests
 
 HTTP_TIMEOUT = 20.0
 MAX_LINKS_TO_CLASSIFY = 150   # anchors handed to the LLM per career page
@@ -57,31 +62,50 @@ class JobLinkPick(BaseModel):
 
 
 def run_discovery(db: firestore.Client) -> int:
-    """Full crawl. Returns number of postings upserted."""
+    """Full crawl. Returns number of postings upserted.
+
+    Every source is isolated: one broken board, dead career page, or LLM
+    outage (career-page link classification is the only LLM dependency
+    here) must never take down the rest of the crawl."""
     boards = _collect_watchlists(db)
     count = 0
+
+    def safe(fn, *args, label: str) -> int:
+        try:
+            return fn(*args)
+        except Exception:
+            log.exception("discovery source %s failed; continuing", label)
+            return 0
+
+    fetchers = {
+        "greenhouse": _fetch_greenhouse, "lever": _fetch_lever,
+        "workday": _fetch_workday, "ashby": _fetch_ashby,
+        "smartrecruiters": _fetch_smartrecruiters, "workable": _fetch_workable,
+    }
     with httpx.Client(timeout=HTTP_TIMEOUT, headers={"User-Agent": "job-engine/0.1"}) as client:
-        for board in sorted(boards.get("greenhouse", set())):
-            count += _upsert_all(db, _fetch_greenhouse(client, board))
-        for board in sorted(boards.get("lever", set())):
-            count += _upsert_all(db, _fetch_lever(client, board))
+        for kind, fetch in fetchers.items():
+            for board in sorted(boards.get(kind, set())):
+                count += safe(lambda f=fetch, b=board: _upsert_board(db, f(client, b)),
+                              label=f"{kind}:{board}")
+        # Career pages last — they're the only LLM-dependent source, so an
+        # API outage degrades to "no career-page postings this crawl".
         for page_url in sorted(boards.get("custom", set())):
-            count += _crawl_career_page(db, client, page_url)
-        for wd_url in sorted(boards.get("workday", set())):
-            count += _upsert_all(db, _fetch_workday(client, wd_url))
+            count += safe(lambda p=page_url: _crawl_career_page(db, client, p),
+                          label=f"custom:{page_url}")
     log.info("discovery complete: %d postings upserted", count)
     return count
 
 
+WATCHLIST_FIELDS = ("greenhouse", "lever", "custom", "workday",
+                    "ashby", "smartrecruiters", "workable")
+
+
 def _collect_watchlists(db: firestore.Client) -> dict[str, set[str]]:
-    boards: dict[str, set[str]] = {
-        "greenhouse": set(), "lever": set(), "custom": set(), "workday": set()}
+    boards: dict[str, set[str]] = {f: set() for f in WATCHLIST_FIELDS}
     for doc in db.collection_group("watchlist").stream():
         data = doc.to_dict() or {}
-        boards["greenhouse"].update(data.get("greenhouse", []))
-        boards["lever"].update(data.get("lever", []))
-        boards["custom"].update(data.get("custom", []))
-        boards["workday"].update(data.get("workday", []))
+        for f in WATCHLIST_FIELDS:
+            boards[f].update(data.get(f, []))
     return boards
 
 
@@ -196,6 +220,101 @@ def _fetch_lever(client: httpx.Client, board: str) -> list[JobPosting]:
 
 
 # ---------------------------------------------------------------------------
+# Ashby / SmartRecruiters / Workable (public JSON APIs, no auth)
+# ---------------------------------------------------------------------------
+
+def _fetch_ashby(client: httpx.Client, board: str) -> list[JobPosting]:
+    try:
+        resp = client.get(ASHBY_URL.format(board=board))
+        resp.raise_for_status()
+        jobs = resp.json().get("jobs", [])
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("ashby board %s failed: %s", board, exc)
+        return []
+    postings = []
+    for job in jobs:
+        url = job.get("jobUrl") or job.get("applyUrl")
+        if not job.get("id") or not url:
+            continue
+        postings.append(JobPosting(
+            source=AtsType.ASHBY,
+            external_id=str(job["id"]),
+            company=board,
+            title=job.get("title", ""),
+            url=url,
+            location=job.get("location"),
+            description_text=_strip_html(job.get("descriptionHtml", "")),
+        ))
+    return postings
+
+
+def _fetch_smartrecruiters(client: httpx.Client, board: str) -> list[JobPosting]:
+    try:
+        resp = client.get(SMARTRECRUITERS_URL.format(board=board))
+        resp.raise_for_status()
+        items = resp.json().get("content", [])
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("smartrecruiters board %s failed: %s", board, exc)
+        return []
+    postings = []
+    for item in items[:MAX_DETAIL_FETCHES]:
+        pid = item.get("id")
+        if not pid:
+            continue
+        # Listing has no description; the detail endpoint has jobAd sections.
+        description = ""
+        try:
+            detail = client.get(SMARTRECRUITERS_DETAIL.format(board=board, pid=pid))
+            detail.raise_for_status()
+            sections = (detail.json().get("jobAd") or {}).get("sections") or {}
+            description = _strip_html(" ".join(
+                (s or {}).get("text", "") for s in sections.values()))
+        except (httpx.HTTPError, ValueError):
+            pass
+        # Public URL needs the {id}-{title-slug} form — a bare id bounces
+        # to the company's main jobs page.
+        slug = re.sub(r"[^a-z0-9]+", "-", (item.get("name") or "").lower()).strip("-")
+        postings.append(JobPosting(
+            source=AtsType.SMARTRECRUITERS,
+            external_id=str(pid),
+            company=board,
+            title=item.get("name", ""),
+            url=f"https://jobs.smartrecruiters.com/{board}/{pid}-{slug}",
+            location=((item.get("location") or {}).get("city")),
+            description_text=description,
+        ))
+    return postings
+
+
+def _fetch_workable(client: httpx.Client, board: str) -> list[JobPosting]:
+    try:
+        resp = client.get(WORKABLE_URL.format(board=board))
+        resp.raise_for_status()
+        jobs = resp.json().get("jobs", [])
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("workable board %s failed: %s", board, exc)
+        return []
+    postings = []
+    for job in jobs:
+        code = job.get("shortcode")
+        url = job.get("url") or (f"https://apply.workable.com/{board}/j/{code}/"
+                                 if code else None)
+        if not code or not url:
+            continue
+        postings.append(JobPosting(
+            source=AtsType.WORKABLE,
+            external_id=str(code),
+            company=board,
+            title=job.get("title", ""),
+            url=url,
+            location=(job.get("location") or {}).get("city")
+                     or job.get("country"),
+            description_text=_strip_html(job.get("description", "")),
+        ))
+    return postings
+
+
+# ---------------------------------------------------------------------------
 # Workday (public CxS JSON API)
 # ---------------------------------------------------------------------------
 
@@ -271,6 +390,36 @@ def _workday_description(client: httpx.Client, cxs: str, ext_path: str) -> str:
         return _strip_html(info.get("jobDescription", ""))
     except (httpx.HTTPError, ValueError):
         return ""
+
+
+def _upsert_board(db: firestore.Client, postings: list[JobPosting]) -> int:
+    """Upsert one board's current postings AND deactivate this board's
+    postings that no longer appear — a closed job otherwise stayed 'active'
+    forever and matched users against a dead link. A board that fetched
+    empty (error or genuinely zero) deactivates nothing: a transient fetch
+    failure must not nuke a live board."""
+    n = _upsert_all(db, postings)
+    if not postings:
+        return 0
+    source, company = postings[0].source.value, postings[0].company
+    keep = {p.posting_id for p in postings}
+    stale = (db.collection("jobPostings")
+             .where(filter=FieldFilter("source", "==", source))
+             .where(filter=FieldFilter("company", "==", company))
+             .where(filter=FieldFilter("active", "==", True)).stream())
+    batch = db.batch()
+    gone = 0
+    for doc in stale:
+        if doc.id not in keep:
+            batch.update(doc.reference, {"active": False})
+            gone += 1
+            if gone % 400 == 0:
+                batch.commit()
+                batch = db.batch()
+    batch.commit()
+    if gone:
+        log.info("%s:%s deactivated %d closed postings", source, company, gone)
+    return n
 
 
 def _upsert_all(db: firestore.Client, postings: list[JobPosting]) -> int:

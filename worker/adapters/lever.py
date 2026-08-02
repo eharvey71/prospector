@@ -95,7 +95,7 @@ class LeverAdapter(SubmissionAdapter):
                     note("Location", location)
 
                 # --- resume ---
-                resume_path = await fetch_resume(uid, name)
+                resume_path = await fetch_resume(uid, name, application.get("resume_path"))
                 resume_input = page.locator("input[name='resume']").first
                 if resume_path and await resume_input.count() > 0:
                     await resume_input.set_input_files(resume_path)
