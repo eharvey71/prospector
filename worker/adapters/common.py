@@ -1,8 +1,10 @@
 """Helpers shared by the Tier-1 adapters.
 
-Everything here is deterministic: option matching, standard-question
-answering from profile facts, resume download, screenshot upload. No LLM
-calls — an adapter that can't answer from these facts escalates.
+Filling is deterministic: option matching, standard-question answering
+from profile facts, resume download, screenshot upload. No LLM calls in
+the fill path — an adapter that can't answer from these facts escalates.
+The one LLM call here is confirm_submission(), the post-submit judge; it
+runs AFTER the click and can only downgrade an outcome, never fill a form.
 """
 from __future__ import annotations
 
@@ -11,6 +13,9 @@ import os
 import re
 import tempfile
 from datetime import datetime, timezone
+from typing import Literal
+
+from pydantic import BaseModel
 
 log = logging.getLogger("adapter.common")
 
@@ -108,6 +113,78 @@ async def fetch_resume(uid: str, display_name: str,
 
 
 SUBMIT_TEXT = re.compile(r"\bsubmit\b|\bsend application\b|\bapply\b", re.I)
+
+# ---------------------------------------------------------------------------
+# Post-submit confirmation: deterministic checks, then an LLM judge.
+# ---------------------------------------------------------------------------
+
+# Deliberately narrow: these phrases essentially never appear before a
+# successful submit. A bare "thank you" is NOT enough — job descriptions
+# say "thank you for your interest", and on a validation-failure page the
+# description is still visible. Anything short of these goes to the judge.
+CONFIRM_RX = re.compile(
+    r"thank you for (applying|your application)"
+    r"|application (has been|was) (submitted|received|sent)"
+    r"|we('| ha)ve received your application", re.I)
+CONFIRM_URL_RX = re.compile(r"/(thanks|thank-you|confirmation|submitted)\b", re.I)
+
+JUDGE_SYSTEM = """You are an impartial auditor of a job-application \
+submission. You are given the text of the page shown immediately after the \
+Submit button was clicked. Decide from the evidence alone — do not assume \
+success. Verdicts:
+- "submitted": the page clearly indicates the application was received \
+(confirmation message, receipt, what-happens-next text).
+- "not_submitted": the application form is still displayed, especially with \
+validation errors or required-field messages.
+- "unclear": anything else.
+confidence is 0-1. reason is one short sentence quoting the decisive \
+evidence."""
+
+
+class SubmitVerdict(BaseModel):
+    verdict: Literal["submitted", "not_submitted", "unclear"]
+    confidence: float = 0.0
+    reason: str = ""
+
+
+async def confirm_submission(page, *, title: str = "", company: str = ""
+                             ) -> tuple[str, str]:
+    """Did the click actually file the application?
+
+    Returns (verdict, reason): 'submitted' | 'not_submitted' | 'unclear'.
+    Free deterministic checks first; the LLM judge only reads the page when
+    they fail. The judge is independent of the fill logic on purpose — the
+    code that did the work doesn't get to grade it. Any judge failure or
+    hesitation degrades to 'unclear' (escalate), never to success or retry.
+    """
+    try:
+        body = await page.evaluate(
+            "() => document.body ? document.body.innerText : ''") or ""
+    except Exception:
+        body = ""
+    if CONFIRM_URL_RX.search(page.url or ""):
+        return "submitted", f"confirmation URL ({page.url})"
+    if CONFIRM_RX.search(body):
+        return "submitted", "confirmation phrase on page"
+    if not body.strip():
+        return "unclear", "post-submit page had no readable text"
+
+    try:
+        from llm import generate_structured
+        v = generate_structured(
+            f"Application submitted for: {title} at {company}\n"
+            f"Page URL after clicking Submit: {page.url}\n\n"
+            f"PAGE TEXT:\n{body[:6000]}",
+            SubmitVerdict,
+            system=JUDGE_SYSTEM,
+            max_tokens=300,
+        )
+    except Exception as exc:
+        log.warning("submission judge unavailable: %s", exc)
+        return "unclear", f"judge unavailable ({type(exc).__name__})"
+    if v.verdict == "submitted" and v.confidence < 0.7:
+        return "unclear", f"judge unsure ({v.confidence:.2f}): {v.reason}"
+    return v.verdict, v.reason or v.verdict
 
 
 async def find_submit_button(page, preferred: list[str]):

@@ -26,6 +26,7 @@ from playwright.async_api import async_playwright
 from .base import SubmissionAdapter, SubmissionOutcome
 from .common import (
     DRY_RUN,
+    confirm_submission,
     decide_standard_answer,
     fetch_resume,
     find_submit_button,
@@ -157,22 +158,29 @@ class GreenhouseAdapter(SubmissionAdapter):
                     raise
                 await page.wait_for_load_state("networkidle", timeout=30_000)
 
-                confirmed = await page.locator(
-                    "text=/thank you|application.*(submitted|received)/i"
-                ).count() > 0
                 shots.append(await take_screenshot(page, uid, app_id, "post_submit"))
+                verdict, why = await confirm_submission(
+                    page, title=posting.get("title", ""),
+                    company=posting.get("company", ""))
 
-                if confirmed:
+                if verdict == "submitted":
                     return SubmissionOutcome(success=True, tier=self.tier,
                                              clicked_submit=True, screenshots=shots)
-                # Submitted, but the page didn't say so in words we know.
-                # clicked_submit stops the worker retrying (which would file
-                # the application a second time) — a human verifies instead.
+                # Either verdict below escalates: clicked_submit stops the
+                # worker retrying (which would file the application a second
+                # time) — a human verifies instead. "not_submitted" gets its
+                # own wording because the fix is different: the form is still
+                # on screen, so the human finishes it rather than checks email.
+                if verdict == "not_submitted":
+                    reason = (f"the form did not go through ({why}) — open the "
+                              f"posting and finish the submission by hand")
+                else:
+                    reason = (f"submitted, but the result page was inconclusive "
+                              f"({why}) — check the screenshot and your email "
+                              f"before resubmitting")
                 return SubmissionOutcome(
                     success=False, tier=self.tier, escalate=True,
-                    clicked_submit=True, screenshots=shots,
-                    reason="submitted, but no confirmation message was found — "
-                           "check the screenshot and your email before resubmitting",
+                    clicked_submit=True, screenshots=shots, reason=reason,
                 )
             finally:
                 await browser.close()
