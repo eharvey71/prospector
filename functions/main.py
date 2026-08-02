@@ -305,7 +305,7 @@ def on_application_written(event: firestore_fn.Event) -> None:
         # "write the letter" (request_draft). User-pasted jobs always draft.
         prefs = (db.collection("users").document(uid).get().to_dict()
                  or {}).get("preferences") or {}
-        if not prefs.get("auto_draft", True) and not after.get("user_added"):
+        if not prefs.get("auto_draft", False) and not after.get("user_added"):
             log.info("auto_draft off; app %s waits in matched", app_id)
             return
         from drafting import draft_application

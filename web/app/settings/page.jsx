@@ -21,9 +21,9 @@ export default function SettingsPage() {
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [excludeCompanies, setExcludeCompanies] = useState("");
   const [minScore, setMinScore] = useState(70);
-  const [autoDraft, setAutoDraft] = useState(true);
+  const [autoDraft, setAutoDraft] = useState(false);
   const [salaryStrategy, setSalaryStrategy] = useState("exact");
-  const [tailorResume, setTailorResume] = useState(true);
+  const [tailorResume, setTailorResume] = useState(false);
   const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
   const [leverBoards, setLeverBoards] = useState("");
   const [customPages, setCustomPages] = useState(""); // career page URLs
@@ -52,9 +52,9 @@ export default function SettingsPage() {
         setRemoteOnly(!!p.remote_only);
         setExcludeCompanies((p.exclude_companies || []).join(", "));
         setMinScore(p.min_match_score ?? 70);
-        setAutoDraft(p.auto_draft ?? true);
+        setAutoDraft(p.auto_draft ?? false);
         setSalaryStrategy(p.salary_strategy || "exact");
-        setTailorResume(p.tailor_resume ?? true);
+        setTailorResume(p.tailor_resume ?? false);
       }
       const wl = await getDoc(doc(db, "users", user.uid, "watchlist", "companies"));
       if (wl.exists()) {
@@ -226,7 +226,7 @@ export default function SettingsPage() {
                 <strong>{s.company}</strong>{" "}
                 <span className="hint" style={{ display: "inline" }}>
                   {s.ats} · {s.jobs} open roles
-                  {s.ats === "workday" && " · found & drafted for you, you submit"}
+                  {s.ats === "workday" && " · letters prepped, you apply on their site"}
                 </span>
                 <div className="hint">
                   {(s.sample_titles || []).filter(Boolean).join(" · ")}
@@ -306,8 +306,12 @@ export default function SettingsPage() {
           <span className="field-label">Workable (apply.workable.com/SLUG)</span>
           <input value={workableBoards} onChange={e => setWorkableBoards(e.target.value)} />
 
-          <p className="grouphead">Found &amp; drafted for you — you click submit</p>
-          <span className="field-label">Workday career sites (full myworkdayjobs.com URLs)</span>
+          <p className="grouphead">Watched — the engine preps the application, you apply on the company site</p>
+          <span className="field-label">
+            Workday career sites (full myworkdayjobs.com URLs). Workday requires
+            a personal account, so the engine finds the jobs and writes the
+            letter — the final application on their site is yours.
+          </span>
           <input value={workdaySites} onChange={e => setWorkdaySites(e.target.value)}
                  placeholder="https://company.wd5.myworkdayjobs.com/External" />
 

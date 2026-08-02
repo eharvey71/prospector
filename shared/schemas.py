@@ -117,7 +117,9 @@ class Preferences(BaseModel):
     remote_only: bool = False
     exclude_companies: list[str] = Field(default_factory=list)
     min_match_score: int = 70       # 0-100 gate before drafting
-    auto_draft: bool = True         # False: matches wait for a manual
+    auto_draft: bool = False        # True: every match immediately gets a
+                                    # letter (several LLM calls each).
+                                    # False (default): matches wait for a manual
                                     # "write the letter" per application
     # Salary questions are knockout traps: a number above the band can
     # auto-reject. "exact" states the target; "range" wraps it in a range;
@@ -126,7 +128,7 @@ class Preferences(BaseModel):
     # Build a per-application resume PDF from profile facts, reordered and
     # reworded against the posting (identity fields verbatim). False: the
     # uploaded resume.pdf is attached everywhere.
-    tailor_resume: bool = True
+    tailor_resume: bool = False
 
 
 class UserProfile(BaseModel):
