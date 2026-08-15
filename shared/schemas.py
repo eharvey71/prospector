@@ -134,6 +134,18 @@ class Preferences(BaseModel):
     tailor_resume: bool = False
 
 
+class SelfIdentification(BaseModel):
+    """Voluntary EEO self-identification, stored as the standard wordings
+    the user picked in Profile. Filled ONLY by the browser extension while
+    the human watches and reviews — the unattended worker never answers
+    demographics. None = unset: the question is left blank for the user."""
+    gender: Optional[str] = None
+    hispanic_latino: Optional[str] = None
+    race: Optional[str] = None
+    veteran_status: Optional[str] = None
+    disability_status: Optional[str] = None
+
+
 class UserProfile(BaseModel):
     name: str
     email: str
@@ -152,6 +164,7 @@ class UserProfile(BaseModel):
     projects: list[ProjectItem] = Field(default_factory=list)
     writing_samples: list[WritingSample] = Field(default_factory=list)
     screeners: ScreenerFacts = Field(default_factory=ScreenerFacts)
+    selfid: SelfIdentification = Field(default_factory=SelfIdentification)
     preferences: Preferences = Field(default_factory=Preferences)
 
 

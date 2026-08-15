@@ -453,6 +453,7 @@ export default function ReviewQueue() {
     const [first, ...rest] = (u.name || "").split(" ");
     add("First name", first);
     add("Last name", rest.join(" "));
+    add("Full name", u.name);
     add("Email", u.email);
     add("Phone", u.phone);
     add("LinkedIn Profile", u.linkedin);
@@ -465,6 +466,26 @@ export default function ReviewQueue() {
       add("Country", "United States");
     }
     return kit;
+  }
+
+  // Structured self-identification + work-eligibility answers for the
+  // extension's dedicated EEO matcher (label classes + option polarity,
+  // not fuzzy text matching). cat names are the fill.js contract.
+  function eeoKit(u) {
+    if (!u) return [];
+    const eeo = [];
+    const auth = (u.work_auth || "").toLowerCase();
+    if (/citizen|green card|permanent resident|authorized to work/.test(auth)) {
+      eeo.push({ cat: "authorized", field: "Authorized to work in the US?", value: "Yes" });
+      eeo.push({ cat: "sponsorship", field: "Require visa sponsorship?", value: "No" });
+    }
+    const s = u.selfid || {};
+    if (s.gender) eeo.push({ cat: "gender", field: "Gender", value: s.gender });
+    if (s.hispanic_latino) eeo.push({ cat: "hispanic", field: "Hispanic or Latino?", value: s.hispanic_latino });
+    if (s.race) eeo.push({ cat: "race", field: "Race", value: s.race });
+    if (s.veteran_status) eeo.push({ cat: "veteran", field: "Veteran status", value: s.veteran_status });
+    if (s.disability_status) eeo.push({ cat: "disability", field: "Disability status", value: s.disability_status });
+    return eeo;
   }
 
   async function openWithAutofill(a) {
@@ -489,6 +510,7 @@ export default function ReviewQueue() {
         ...standardKit(userDoc).filter((e) => !have.has(norm(e.field))),
       ],
       needs: sheet.filter((e) => e.status !== "filled"),
+      eeo: eeoKit(userDoc),
       answers: [
         ...Object.entries(answers)
           .filter(([k, v]) => k !== "extra" && v)

@@ -43,6 +43,9 @@ export default function ProfilePage() {
   // Standard screeners: "" = not set (question escalates), "yes"/"no"
   const [relocation, setRelocation] = useState("");
   const [onsite, setOnsite] = useState("");
+  // Voluntary self-identification: "" = unset (left blank on forms)
+  const [selfid, setSelfid] = useState({});
+  const sid = (k, v) => setSelfid(s => ({ ...s, [k]: v }));
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
@@ -92,6 +95,7 @@ export default function ProfilePage() {
         const tri = (v) => (v === true ? "yes" : v === false ? "no" : "");
         setRelocation(tri(d.screeners?.open_to_relocation));
         setOnsite(tri(d.screeners?.onsite_ok));
+        setSelfid(d.selfid || {});
       } else {
         setEmail(user.email || "");
       }
@@ -137,6 +141,13 @@ export default function ProfilePage() {
       screeners: {
         open_to_relocation: relocation === "" ? null : relocation === "yes",
         onsite_ok: onsite === "" ? null : onsite === "yes",
+      },
+      selfid: {
+        gender: selfid.gender || null,
+        hispanic_latino: selfid.hispanic_latino || null,
+        race: selfid.race || null,
+        veteran_status: selfid.veteran_status || null,
+        disability_status: selfid.disability_status || null,
       },
       updatedAt: serverTimestamp(),
     };
@@ -271,6 +282,59 @@ export default function ProfilePage() {
           <option value="">Not set — ask me each time</option>
           <option value="yes">Yes</option>
           <option value="no">No</option>
+        </select>
+      </div>
+      </details>
+
+      <details className="panel">
+        <summary>Voluntary self-identification (optional)</summary>
+        <div className="panelbody">
+        <p style={{ color: T.muted, fontSize: 13 }}>
+          The demographic questions at the end of most US applications
+          (EEO/OFCCP). Set them once and the browser extension fills them
+          while you watch — the unattended engine never answers these.
+          Anything left unset stays blank on the form for you to answer.
+          Answering (or declining to answer) never affects your application.
+        </p>
+        <span style={label}>Gender</span>
+        <select style={input} value={selfid.gender || ""} onChange={e => sid("gender", e.target.value)}>
+          <option value="">Not set — leave blank on forms</option>
+          <option>Male</option>
+          <option>Female</option>
+          <option>Non-binary</option>
+          <option>I don&apos;t wish to answer</option>
+        </select>
+        <span style={label}>Are you Hispanic or Latino?</span>
+        <select style={input} value={selfid.hispanic_latino || ""} onChange={e => sid("hispanic_latino", e.target.value)}>
+          <option value="">Not set — leave blank on forms</option>
+          <option>Yes</option>
+          <option>No</option>
+          <option>I don&apos;t wish to answer</option>
+        </select>
+        <span style={label}>Race (asked when the answer above is No)</span>
+        <select style={input} value={selfid.race || ""} onChange={e => sid("race", e.target.value)}>
+          <option value="">Not set — leave blank on forms</option>
+          <option>American Indian or Alaska Native</option>
+          <option>Asian</option>
+          <option>Black or African American</option>
+          <option>Native Hawaiian or Other Pacific Islander</option>
+          <option>White</option>
+          <option>Two or More Races</option>
+          <option>I don&apos;t wish to answer</option>
+        </select>
+        <span style={label}>Veteran status</span>
+        <select style={input} value={selfid.veteran_status || ""} onChange={e => sid("veteran_status", e.target.value)}>
+          <option value="">Not set — leave blank on forms</option>
+          <option>I am not a protected veteran</option>
+          <option>I identify as one or more of the classifications of a protected veteran</option>
+          <option>I don&apos;t wish to answer</option>
+        </select>
+        <span style={label}>Disability status</span>
+        <select style={input} value={selfid.disability_status || ""} onChange={e => sid("disability_status", e.target.value)}>
+          <option value="">Not set — leave blank on forms</option>
+          <option>Yes, I have a disability (or previously had one)</option>
+          <option>No, I do not have a disability</option>
+          <option>I don&apos;t wish to answer</option>
         </select>
       </div>
       </details>

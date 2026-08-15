@@ -62,6 +62,124 @@
       && !["hidden", "submit", "button", "file", "radio", "checkbox"].includes(el.type)
       && !el.value);
 
+  // ------------------------------------------------------------------
+  // EEO / self-identification: these questions get a dedicated matcher.
+  // Labels are classified into a category, and the option is chosen by
+  // category-specific rules with yes/no polarity safety — never by fuzzy
+  // text similarity. No confident match -> the question stays blank.
+  // ------------------------------------------------------------------
+  // norm() turns "don't" into "don t" — patterns match that form.
+  const DECLINE_RX = /decline|don t wish|dont wish|do not wish|prefer not|do not want|rather not/;
+  const EEO_LABELS = {
+    authorized: /legally authorized|authorized to work|eligible to work|work authorization/,
+    sponsorship: /sponsor|require.*visa|visa.*status/,
+    veteran: /veteran/,
+    disability: /disab/,
+    hispanic: /hispanic|latino|latinx/,
+    race: /\brace\b|ethnicit/,
+    gender: /\bgender\b/,
+  };
+  const EEO_ORDER = ["authorized", "sponsorship", "veteran", "disability",
+                     "hispanic", "race", "gender"];
+
+  // opts are normalized option texts; returns an index or -1 (leave blank).
+  function pickEEOOption(cat, value, opts, eeoAll) {
+    const v = norm(value);
+    const find = (rx) => opts.findIndex((o) => rx.test(o));
+    if (DECLINE_RX.test(v)) return find(DECLINE_RX);
+    if (cat === "veteran") {
+      if (/\bnot\b/.test(v)) return find(/\bam not\b|\bnot a protected\b/);
+      return opts.findIndex((o) => /protected veteran/.test(o)
+        && !/\bnot\b/.test(o) && !DECLINE_RX.test(o));
+    }
+    if (cat === "authorized" || cat === "sponsorship"
+        || cat === "hispanic" || cat === "disability") {
+      // ^no\b will not match "none of the above"; "No, I do not have a
+      // disability" norms to "no i do not have..." and matches.
+      if (/^yes\b/.test(v)) return find(/^yes\b/);
+      if (/^no\b/.test(v)) return find(/^no\b/);
+      return -1;
+    }
+    if (cat === "gender") {
+      const exact = opts.findIndex((o) => o === v);
+      return exact >= 0 ? exact : opts.findIndex((o) => o.startsWith(v + " "));
+    }
+    if (cat === "race") {
+      // Combined Race/Ethnicity dropdowns list "Hispanic or Latino" as an
+      // option; when the user identified as Hispanic, that wins.
+      const hisp = (eeoAll || []).find((e) => e.cat === "hispanic");
+      if (hisp && /^yes\b/.test(norm(hisp.value))) {
+        const i = find(/hispanic|latino/);
+        if (i >= 0) return i;
+      }
+      const groups = [
+        [/american indian|alaska/, /american indian|alaska/],
+        [/\basian\b/, /\basian\b/],          // \b keeps "caucasian" out
+        [/black|african american/, /black|african american/],
+        [/hawaiian|pacific island/, /hawaiian|pacific island/],
+        [/two or more|multiracial/, /two or more|multiracial/],
+        [/\bwhite\b/, /\bwhite\b|caucasian/],
+      ];
+      for (const [vrx, orx] of groups) if (vrx.test(v)) return find(orx);
+      return -1;
+    }
+    return -1;
+  }
+
+  function eeoControls() {
+    const out = [];
+    for (const sel of document.querySelectorAll("select")) {
+      if (sel.offsetParent === null || sel.selectedIndex > 0) continue;
+      out.push({ kind: "select", el: sel, label: norm(labelFor(sel)),
+                 opts: [...sel.options].map((o) => norm(o.textContent)) });
+    }
+    const groups = new Map();
+    for (const r of document.querySelectorAll("input[type='radio']")) {
+      if (r.offsetParent === null) continue;
+      const key = r.name || "anon";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(r);
+    }
+    for (const radios of groups.values()) {
+      if (radios.some((r) => r.checked)) continue;
+      const fs = radios[0].closest("fieldset, [role='radiogroup'], ul, div");
+      let glabel = fs?.querySelector("legend")?.textContent || "";
+      if (!glabel) {
+        const lbl = fs?.parentElement?.querySelector("label, legend, [class*='label']");
+        if (lbl && !lbl.querySelector("input")) glabel = lbl.textContent;
+      }
+      out.push({
+        kind: "radio", radios,
+        label: norm(glabel || radios[0].name),
+        opts: radios.map((r) =>
+          norm(r.closest("label")?.textContent || labelFor(r) || r.value)),
+      });
+    }
+    return out;
+  }
+
+  function fillEEO(eeo) {
+    const res = { count: 0, cats: new Set() };
+    if (!eeo || !eeo.length) return res;
+    for (const ctl of eeoControls()) {
+      const cat = EEO_ORDER.find((c) => EEO_LABELS[c].test(ctl.label));
+      if (!cat) continue;
+      const entry = eeo.find((e) => e.cat === cat);
+      if (!entry) continue;
+      const i = pickEEOOption(cat, entry.value, ctl.opts, eeo);
+      if (i < 0) continue;
+      if (ctl.kind === "select") {
+        ctl.el.value = ctl.el.options[i].value;
+        ctl.el.dispatchEvent(new Event("change", { bubbles: true }));
+      } else {
+        ctl.radios[i].click();
+      }
+      res.count++;
+      res.cats.add(cat);
+    }
+    return res;
+  }
+
   function fillAll(pending) {
     let count = 0;
     const filledKeys = new Set();
@@ -75,18 +193,24 @@
       "first name": "#first_name", "last name": "#last_name",
       "email": "#email, input[name='email'], input[type='email']",
       "phone": "#phone, input[name='phone'], input[type='tel']",
-      "full name": "input[name='name']",
-      "linkedin": "input[name*='linkedin' i], input[id*='linkedin' i]",
+      "full name": "input[name='name'], input[autocomplete='name']",
+      "linkedin": "input[name*='linkedin' i], input[id*='linkedin' i], "
+        + "input[placeholder*='linkedin' i], input[aria-label*='linkedin' i]",
       "website": "input[name*='website' i], input[name*='portfolio' i]",
       "location": "input[name='location']",
       "cover letter": "textarea[name*='cover'], #cover_letter_text, textarea[name='comments']",
     };
+    // First VISIBLE, EMPTY match — plain querySelector was grabbing hidden
+    // inputs (ATSes keep e.g. a hidden urls[LinkedIn] field alongside the
+    // styled visible one) and "filling" them invisibly.
+    const firstVisible = (sel) => [...document.querySelectorAll(sel)]
+      .find((e) => e.offsetParent !== null && !e.value) || null;
     for (const { field, value } of values) {
       if (!value || /entered \(full text/.test(value) || field === "Resume") continue;
       const f = fieldKey(field);
       let el = null;
       for (const [key, sel] of Object.entries(direct)) {
-        if (f.includes(key)) { el = document.querySelector(sel); break; }
+        if (f.includes(key)) { el = firstVisible(sel); break; }
       }
       if (!el || el.value) {
         el = fillables().find((cand) => labelMatches(field, labelFor(cand))) || null;
@@ -108,6 +232,9 @@
         break;
       }
     }
+    const eeoRes = fillEEO(pending.eeo);
+    count += eeoRes.count;
+    for (const c of eeoRes.cats) filledKeys.add("eeo " + c);
     return { count, filledKeys };
   }
 
@@ -159,13 +286,13 @@
     }, 800);
 
     const rowRegistry = [];
-    const row = (label, value) => {
+    const row = (label, value, key) => {
       const div = document.createElement("div");
       div.style.cssText = `margin:6px 0;padding:6px 8px;background:${P.alt};border-radius:6px`;
       const name = document.createElement("div");
       name.textContent = label;
       name.style.cssText = `color:${P.muted};font-size:11px`;
-      rowRegistry.push({ key: fieldKey(label), div, name });
+      rowRegistry.push({ key: key || fieldKey(label), div, name });
       const val = document.createElement("div");
       val.textContent = value.length > 90 ? value.slice(0, 90) + "…" : value;
       const copy = document.createElement("button");
@@ -265,6 +392,13 @@
         panel.append(row(e.field.replace(/\s*\(could not verify selection\)/, ""),
                          e.suggestion));
       }
+    }
+    if ((pending.eeo || []).length) {
+      const t = document.createElement("div");
+      t.textContent = "Self-identification — filled where the form allows:";
+      t.style.cssText = `color:${P.accent};font-weight:600;margin-top:8px`;
+      panel.append(t);
+      for (const e of pending.eeo) panel.append(row(e.field, e.value, "eeo " + e.cat));
     }
     if (yours.length) {
       const t = document.createElement("div");
