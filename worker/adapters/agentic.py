@@ -25,7 +25,9 @@ from playwright.async_api import async_playwright
 from pydantic import BaseModel, Field
 
 from .base import SubmissionAdapter, SubmissionOutcome
-from .common import DRY_RUN, fetch_resume, take_screenshot
+from .common import (DRY_RUN, confirm_submission, fetch_resume,
+                     find_submit_button, mark_submit_clicked,
+                     take_screenshot, unmark_submit_clicked)
 
 log = logging.getLogger("adapter.agentic")
 
@@ -246,18 +248,43 @@ class AgenticAdapter(SubmissionAdapter):
                                "(set SUBMIT_DRY_RUN=false to go live)",
                     )
 
-                await page.locator(
-                    "button[type='submit'], input[type='submit']").first.click()
+                submit_btn = await find_submit_button(page, [])
+                if submit_btn is None:
+                    shots.append(await take_screenshot(page, uid, app_id, "no_submit_button"))
+                    return SubmissionOutcome(
+                        success=False, tier=self.tier, escalate=True,
+                        screenshots=shots,
+                        reason="filled the form but could not identify its "
+                               "Submit button — finish it by hand",
+                    )
+                # Point of no return: record the click BEFORE making it, then
+                # undo the record if the click provably didn't happen.
+                await mark_submit_clicked(uid, app_id)
+                try:
+                    await submit_btn.click()
+                except Exception:
+                    await unmark_submit_clicked(uid, app_id)
+                    raise
                 await page.wait_for_load_state("networkidle", timeout=30_000)
-                confirmed = await page.locator(
-                    "text=/thank you|application.*(submitted|received)/i"
-                ).count() > 0
                 shots.append(await take_screenshot(page, uid, app_id, "post_submit"))
-                if confirmed:
-                    return SubmissionOutcome(success=True, tier=self.tier, screenshots=shots)
+                verdict, why = await confirm_submission(
+                    page, title=posting.get("title", ""),
+                    company=posting.get("company", ""))
+                if verdict == "submitted":
+                    return SubmissionOutcome(success=True, tier=self.tier,
+                                             clicked_submit=True, screenshots=shots)
+                # Both remaining verdicts escalate — clicked_submit blocks any
+                # retry — but with wording matched to the fix the human makes.
+                if verdict == "not_submitted":
+                    reason = (f"the form did not go through ({why}) — open the "
+                              f"posting and finish the submission by hand")
+                else:
+                    reason = (f"submitted, but the result page was inconclusive "
+                              f"({why}) — check the screenshot and your email "
+                              f"before resubmitting")
                 return SubmissionOutcome(
-                    success=False, tier=self.tier, screenshots=shots,
-                    reason="submitted but no confirmation found",
+                    success=False, tier=self.tier, escalate=True,
+                    clicked_submit=True, screenshots=shots, reason=reason,
                 )
             finally:
                 await browser.close()

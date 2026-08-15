@@ -1,24 +1,33 @@
-// Runs on every page. If extension storage holds an autofill payload whose
-// host matches this page, show a panel: one click fills what can be filled
-// deterministically (text fields, native selects), and everything else gets
-// a copy button. Nothing is ever submitted — the human owns the Submit click.
+// Runs in EVERY frame (all_frames). The panel lives in the top frame; the
+// actual application form very often lives in an embedded ATS iframe
+// (a Greenhouse form inside a company's careers page), so "Fill this form"
+// fills the top frame AND broadcasts into every child frame. Nothing is
+// ever submitted.
+//
+// The panel appears two ways:
+//   - automatically, when the page's domain matches the loaded job
+//   - on demand, when the toolbar button or right-click menu asks for it —
+//     for applications you reach by clicking through two or three domains
+//     (LinkedIn -> careers page -> the ATS), where no auto-match happens.
 
-(async function () {
-  const { pending } = await chrome.storage.local.get("pending");
-  if (!pending || !pending.url) return;
-  let targetHost;
-  try { targetHost = new URL(pending.url).hostname; } catch { return; }
-  // Match on the registrable domain, not the exact host — ATSes redirect
-  // between subdomains (boards.greenhouse.io <-> job-boards.greenhouse.io)
-  // and an exact match made the panel vanish after the hop.
-  const tail = (h) => h.split(".").slice(-2).join(".");
-  if (tail(location.hostname) !== tail(targetHost)) {
-    console.log(`[job-engine] autofill payload is for ${targetHost}; this is`
-      + ` ${location.hostname} — panel not shown`);
-    return;
-  }
-
+(function () {
   const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+  const fieldKey = (s) => norm((s || "").replace(/\(.*?\)/g, ""));
+
+  // Demographic/legal and money labels never receive generic kit values.
+  const SENSITIVE = /citizen|visa|sponsor|veteran|disab|gender|race|ethnic|hispanic|clearance|criminal/;
+  const MONEY = /salary|compensation|pay\b|wage/;
+
+  function labelMatches(field, label) {
+    const f = fieldKey(field), l = norm(label);
+    if (!f || !l) return false;
+    if (SENSITIVE.test(l) && !SENSITIVE.test(f)) return false;
+    if (MONEY.test(l) && !MONEY.test(f)) return false;
+    if (f === l) return true;
+    const ft = f.split(" "), lt = l.split(" ");
+    if (ft.every((t) => lt.includes(t))) return ft.length >= 3 || lt.length <= 6;
+    return f.length >= 15 && (l.includes(f) || f.includes(l));
+  }
 
   const labelFor = (el) => {
     if (el.labels && el.labels.length) return el.labels[0].textContent;
@@ -39,8 +48,7 @@
     return el.name || el.placeholder || "";
   };
 
-  // React re-renders from its own state, so set values through the native
-  // setter and fire input/change — a plain .value assignment gets wiped.
+  // React re-renders from its own state: set through the native setter.
   const setValue = (el, value) => {
     const proto = el instanceof HTMLTextAreaElement
       ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
@@ -54,47 +62,15 @@
       && !["hidden", "submit", "button", "file", "radio", "checkbox"].includes(el.type)
       && !el.value);
 
-  const fieldKey = (s) => norm((s || "").replace(/\(.*?\)/g, ""));
-
-  // Demographic/legal labels never receive generic kit values — "State"
-  // must not fill "Are you a citizen of the United States?". Only an entry
-  // whose own field text is about the same topic may touch them.
-  const SENSITIVE = /citizen|visa|sponsor|veteran|disab|gender|race|ethnic|hispanic|clearance|criminal/;
-  // Same idea for money questions: "State your desired salary" must not
-  // receive the State kit value.
-  const MONEY = /salary|compensation|pay\b|wage/;
-
-  // Word-boundary matching. Substring matching put "Virginia" into a
-  // citizenship question because "...United States?" contains "state".
-  function labelMatches(field, label) {
-    const f = fieldKey(field), l = norm(label);
-    if (!f || !l) return false;
-    if (SENSITIVE.test(l) && !SENSITIVE.test(f)) return false;
-    if (MONEY.test(l) && !MONEY.test(f)) return false;
-    if (f === l) return true;
-    const ft = f.split(" "), lt = l.split(" ");
-    if (ft.every((t) => lt.includes(t))) {
-      // Every field word appears whole in the label. Short noun fields
-      // (City, State, Phone) may only match short labels, never question
-      // sentences; multi-word fields are specific enough on their own.
-      return ft.length >= 3 || lt.length <= 6;
-    }
-    // Last resort for long question-style fields: raw containment.
-    return f.length >= 15 && (l.includes(f) || f.includes(l));
-  }
-
-  function fillAll() {
+  function fillAll(pending) {
     let count = 0;
     const filledKeys = new Set();
     const values = [...(pending.values || [])];
     if (pending.letter) values.push({ field: "cover letter", value: pending.letter });
-    // Suggested answers for the open questions are attempted too — the
-    // human is watching, so a visible best-effort fill beats a copy button.
     for (const e of pending.needs || []) {
       if (e.suggestion) values.push({ field: e.field, value: e.suggestion });
     }
 
-    // Known ATS shortcuts first (exact ids/names), then label matching.
     const direct = {
       "first name": "#first_name", "last name": "#last_name",
       "email": "#email, input[name='email'], input[type='email']",
@@ -107,8 +83,6 @@
     };
     for (const { field, value } of values) {
       if (!value || /entered \(full text/.test(value) || field === "Resume") continue;
-      // "(could not verify selection)" and similar annotations from the
-      // worker would break label matching — strip parentheticals.
       const f = fieldKey(field);
       let el = null;
       for (const [key, sel] of Object.entries(direct)) {
@@ -120,8 +94,6 @@
       if (el && !el.value) {
         setValue(el, value); count++; filledKeys.add(f); continue;
       }
-
-      // Native selects: match by option text.
       for (const sel of document.querySelectorAll("select")) {
         if (sel.offsetParent === null) continue;
         if (!labelMatches(field, labelFor(sel))) continue;
@@ -139,131 +111,215 @@
     return { count, filledKeys };
   }
 
-  // --- panel ---
-  const P = { bg: "#1d2026", alt: "#22262e", border: "#33383f", text: "#e2e4e9",
+  // ------------------------------------------------------------------
+  // Child frames: no UI. Fill on request from the top-frame panel.
+  // ------------------------------------------------------------------
+  if (window !== window.top) {
+    window.addEventListener("message", async (ev) => {
+      if (ev.data?.type !== "JOB_ENGINE_FILL") return;
+      try {
+        const { pending } = await chrome.storage.local.get("pending");
+        if (!pending) return;
+        const { count } = fillAll(pending);
+        window.top.postMessage({ type: "JOB_ENGINE_FILL_RESULT", count }, "*");
+      } catch { /* extension context gone — nothing to do */ }
+    });
+    return;
+  }
+
+  // ------------------------------------------------------------------
+  // Top frame: the panel.
+  // ------------------------------------------------------------------
+  const P = { bg: "#1d2026", alt: "#23262d", border: "#2f343c", text: "#e2e4e9",
               muted: "#9aa1ad", accent: "#6f9ff3", warn: "#e0b34c" };
-  const panel = document.createElement("div");
-  panel.style.cssText = `position:fixed;top:16px;right:16px;width:320px;max-height:80vh;
-    overflow-y:auto;z-index:2147483647;background:${P.bg};color:${P.text};
-    border:1px solid ${P.border};border-radius:10px;padding:14px;
-    font:13px/1.45 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.5)`;
-
-  const rowRegistry = [];   // fieldKey -> row nodes, for post-fill ✓ marks
-
-  const row = (label, value) => {
-    const div = document.createElement("div");
-    div.style.cssText = `margin:6px 0;padding:6px 8px;background:${P.alt};border-radius:6px`;
-    const name = document.createElement("div");
-    name.textContent = label;
-    name.style.cssText = `color:${P.muted};font-size:11px`;
-    rowRegistry.push({ key: fieldKey(label), div, name });
-    const val = document.createElement("div");
-    val.textContent = value.length > 90 ? value.slice(0, 90) + "…" : value;
-    const copy = document.createElement("button");
-    copy.textContent = "copy";
-    copy.style.cssText = `float:right;background:none;border:1px solid ${P.border};
-      color:${P.accent};border-radius:4px;cursor:pointer;font-size:11px;padding:1px 8px`;
-    copy.onclick = () => {
-      navigator.clipboard.writeText(value);
-      copy.textContent = "copied ✓";
-      setTimeout(() => { copy.textContent = "copy"; }, 1500);
-    };
-    div.append(copy, name, val);
-    return div;
-  };
-
-  const h = document.createElement("div");
-  h.innerHTML = `<strong>Job Engine autofill</strong>`;
-  // SPA pages re-render aggressively and can sweep the panel out of the
-  // DOM — re-attach until the user closes or clears it.
+  let panel = null;
   let keepAlive = null;
-  const dismiss = () => { clearInterval(keepAlive); panel.remove(); };
-  keepAlive = setInterval(() => {
-    if (!document.documentElement.contains(panel)) {
-      (document.body || document.documentElement).append(panel);
+
+  function dismiss() {
+    clearInterval(keepAlive);
+    keepAlive = null;
+    panel?.remove();
+    panel = null;
+  }
+
+  function showPanel(pending) {
+    dismiss();   // a fresh summon always rebuilds
+
+    panel = document.createElement("div");
+    panel.style.cssText = `position:fixed;top:16px;right:16px;width:320px;max-height:80vh;
+      overflow-y:auto;z-index:2147483647;background:${P.bg};color:${P.text};
+      border:1px solid ${P.border};border-radius:10px;padding:14px;
+      font:13px/1.45 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.5)`;
+
+    // SPA pages re-render aggressively and can sweep the panel out.
+    keepAlive = setInterval(() => {
+      if (panel && !document.documentElement.contains(panel)) {
+        (document.body || document.documentElement).append(panel);
+      }
+    }, 800);
+
+    const rowRegistry = [];
+    const row = (label, value) => {
+      const div = document.createElement("div");
+      div.style.cssText = `margin:6px 0;padding:6px 8px;background:${P.alt};border-radius:6px`;
+      const name = document.createElement("div");
+      name.textContent = label;
+      name.style.cssText = `color:${P.muted};font-size:11px`;
+      rowRegistry.push({ key: fieldKey(label), div, name });
+      const val = document.createElement("div");
+      val.textContent = value.length > 90 ? value.slice(0, 90) + "…" : value;
+      const copy = document.createElement("button");
+      copy.textContent = "copy";
+      copy.style.cssText = `float:right;background:none;border:1px solid ${P.border};
+        color:${P.accent};border-radius:4px;cursor:pointer;font-size:11px;padding:1px 8px`;
+      copy.onclick = () => {
+        navigator.clipboard.writeText(value);
+        copy.textContent = "copied ✓";
+        setTimeout(() => { copy.textContent = "copy"; }, 1500);
+      };
+      div.append(copy, name, val);
+      return div;
+    };
+
+    const close = document.createElement("button");
+    close.textContent = "✕";
+    close.style.cssText = `float:right;background:none;border:none;color:${P.muted};cursor:pointer;font-size:14px`;
+    close.onclick = dismiss;
+    const h = document.createElement("div");
+    h.innerHTML = `<strong>Job Engine autofill</strong>`;
+    const sub = document.createElement("div");
+    sub.textContent = `${pending.title || ""} @ ${pending.company || ""}`;
+    sub.style.cssText = `color:${P.muted};margin:2px 0 10px`;
+    panel.append(close, h, sub);
+
+    // Clicked through to a different site than the job's own URL? Say so,
+    // so nobody wonders whether these answers belong to this page.
+    try {
+      const tail = (u) => new URL(u).hostname.split(".").slice(-2).join(".");
+      if (tail(pending.url) !== tail(location.href)) {
+        const note = document.createElement("div");
+        note.textContent = `Answers loaded from ${tail(pending.url)} — check they suit this form.`;
+        note.style.cssText = `color:${P.warn};font-size:11.5px;margin:-6px 0 10px`;
+        panel.append(note);
+      }
+    } catch { /* unparseable URL — skip the note */ }
+
+    const fillBtn = document.createElement("button");
+    fillBtn.textContent = "Fill this form";
+    fillBtn.style.cssText = `width:100%;padding:9px;background:${P.accent};color:#10131a;
+      border:none;border-radius:6px;font-weight:600;cursor:pointer;margin-bottom:6px`;
+    const status = document.createElement("div");
+    status.style.cssText = `color:${P.muted};margin-bottom:8px`;
+
+    fillBtn.onclick = () => {
+      const { count, filledKeys } = fillAll(pending);
+      let frameCount = 0;
+      const render = () => {
+        const total = count + frameCount;
+        status.textContent = `Filled ${total} field${total === 1 ? "" : "s"}`
+          + (frameCount ? ` (${frameCount} in the embedded form)` : "")
+          + ` — review everything, attach your resume by hand, then click the`
+          + ` page's own Submit.`;
+      };
+      const collect = (ev) => {
+        if (ev.data?.type !== "JOB_ENGINE_FILL_RESULT") return;
+        frameCount += ev.data.count || 0;
+        render();
+      };
+      window.addEventListener("message", collect);
+      for (const f of document.querySelectorAll("iframe")) {
+        try { f.contentWindow.postMessage({ type: "JOB_ENGINE_FILL" }, "*"); }
+        catch { /* cross-origin contentWindow access — ignore */ }
+      }
+      setTimeout(() => window.removeEventListener("message", collect), 3000);
+      render();
+      for (const r of rowRegistry) {
+        if (filledKeys.has(r.key) && !r.name.textContent.startsWith("✓")) {
+          r.name.textContent = "✓ " + r.name.textContent;
+          r.div.style.opacity = "0.55";
+        }
+      }
+    };
+
+    panel.append(fillBtn, status);
+
+    if (pending.resumeUrl) {
+      const rl = document.createElement("a");
+      rl.href = pending.resumeUrl;
+      rl.target = "_blank";
+      rl.rel = "noreferrer";
+      rl.textContent = "Download the tailored resume ↗ — then attach it to the form";
+      rl.style.cssText = `display:block;color:${P.accent};margin-bottom:8px;text-decoration:underline`;
+      panel.append(rl);
     }
-  }, 800);
 
-  const close = document.createElement("button");
-  close.textContent = "✕";
-  close.style.cssText = `float:right;background:none;border:none;color:${P.muted};cursor:pointer;font-size:14px`;
-  close.onclick = dismiss;
-  const sub = document.createElement("div");
-  sub.textContent = `${pending.title || ""} @ ${pending.company || ""}`;
-  sub.style.cssText = `color:${P.muted};margin:2px 0 10px`;
-
-  const fillBtn = document.createElement("button");
-  fillBtn.textContent = "Fill this form";
-  fillBtn.style.cssText = `width:100%;padding:9px;background:${P.accent};color:#10131a;
-    border:none;border-radius:6px;font-weight:600;cursor:pointer;margin-bottom:6px`;
-  const status = document.createElement("div");
-  status.style.cssText = `color:${P.muted};margin-bottom:8px`;
-  fillBtn.onclick = () => {
-    const { count, filledKeys } = fillAll();
-    status.textContent = `Filled ${count} field${count === 1 ? "" : "s"} — checked rows `
-      + `below went in. Review everything, attach your resume by hand, then `
-      + `click the page's own Submit.`;
-    for (const r of rowRegistry) {
-      if (filledKeys.has(r.key) && !r.name.textContent.startsWith("✓")) {
-        r.name.textContent = "✓ " + r.name.textContent;
-        r.div.style.opacity = "0.55";
+    const needs = pending.needs || [];
+    const known = needs.filter((e) => e.suggestion);
+    const yours = needs.filter((e) => !e.suggestion);
+    if (known.length) {
+      const t = document.createElement("div");
+      t.textContent = `Known answers — Fill will try these (${known.length}):`;
+      t.style.cssText = `color:${P.accent};font-weight:600;margin-top:8px`;
+      panel.append(t);
+      for (const e of known) {
+        panel.append(row(e.field.replace(/\s*\(could not verify selection\)/, ""),
+                         e.suggestion));
       }
     }
-  };
-
-  panel.append(close, h, sub, fillBtn, status);
-
-  if (pending.resumeUrl) {
-    const rl = document.createElement("a");
-    rl.href = pending.resumeUrl;
-    rl.target = "_blank";
-    rl.rel = "noreferrer";
-    rl.textContent = "Download the tailored resume ↗ — then attach it to the form";
-    rl.style.cssText = `display:block;color:${P.accent};margin-bottom:8px;text-decoration:underline`;
-    panel.append(rl);
-  }
-
-  const needs = pending.needs || [];
-  const known = needs.filter((e) => e.suggestion);
-  const yours = needs.filter((e) => !e.suggestion);
-  if (known.length) {
-    const t = document.createElement("div");
-    t.textContent = `Known answers — Fill will try these (${known.length}):`;
-    t.style.cssText = `color:${P.accent};font-weight:600;margin-top:8px`;
-    panel.append(t);
-    for (const e of known) {
-      panel.append(row(e.field.replace(/\s*\(could not verify selection\)/, ""),
-                       e.suggestion));
+    if (yours.length) {
+      const t = document.createElement("div");
+      t.textContent = `Only you can answer (${yours.length}):`;
+      t.style.cssText = `color:${P.warn};font-weight:600;margin-top:8px`;
+      panel.append(t);
+      for (const e of yours) panel.append(row(e.field, "(your call)"));
     }
-  }
-  if (yours.length) {
-    const t = document.createElement("div");
-    t.textContent = `Only you can answer (${yours.length}):`;
-    t.style.cssText = `color:${P.warn};font-weight:600;margin-top:8px`;
-    panel.append(t);
-    for (const e of yours) panel.append(row(e.field, "(your call)"));
-  }
-  const values = pending.values || [];
-  if (values.length || pending.letter) {
-    const t = document.createElement("div");
-    t.textContent = "Prepared values:";
-    t.style.cssText = `color:${P.muted};font-weight:600;margin-top:10px`;
-    panel.append(t);
-    if (pending.letter) panel.append(row("Cover letter", pending.letter));
-    for (const e of values) {
-      if (e.value && !/entered \(full text/.test(e.value)) panel.append(row(e.field, e.value));
+    const values = pending.values || [];
+    if (values.length || pending.letter) {
+      const t = document.createElement("div");
+      t.textContent = "Prepared values:";
+      t.style.cssText = `color:${P.muted};font-weight:600;margin-top:10px`;
+      panel.append(t);
+      if (pending.letter) panel.append(row("Cover letter", pending.letter));
+      for (const e of values) {
+        if (e.value && !/entered \(full text/.test(e.value)) panel.append(row(e.field, e.value));
+      }
     }
+    for (const e of pending.answers || []) panel.append(row(e.field, e.value));
+
+    const clear = document.createElement("button");
+    clear.textContent = "Done with this job (clear)";
+    clear.style.cssText = `width:100%;margin-top:10px;padding:6px;background:none;
+      border:1px solid ${P.border};color:${P.muted};border-radius:6px;cursor:pointer`;
+    clear.onclick = () => chrome.runtime.sendMessage({ kind: "clear" }, dismiss);
+    panel.append(clear);
+
+    (document.body || document.documentElement).append(panel);
   }
-  for (const e of pending.answers || []) panel.append(row(e.field, e.value));
 
-  const clear = document.createElement("button");
-  clear.textContent = "Done with this job (clear)";
-  clear.style.cssText = `width:100%;margin-top:10px;padding:6px;background:none;
-    border:1px solid ${P.border};color:${P.muted};border-radius:6px;cursor:pointer`;
-  clear.onclick = () => {
-    chrome.runtime.sendMessage({ kind: "clear" }, dismiss);
-  };
-  panel.append(clear);
+  // Summoned explicitly (toolbar button / right-click): no domain check —
+  // the click IS the intent, and the whole point is pages we couldn't have
+  // matched automatically.
+  chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
+    if (msg?.kind !== "show_panel") return;
+    chrome.storage.local.get("pending").then(({ pending }) => {
+      if (pending?.url) showPanel(pending);
+      respond({ shown: !!pending?.url });
+    });
+    return true;   // async respond
+  });
 
-  (document.body || document.documentElement).append(panel);
+  // Automatic appearance on the job's own site.
+  (async function () {
+    const { pending } = await chrome.storage.local.get("pending");
+    if (!pending || !pending.url) return;
+    let targetHost;
+    try { targetHost = new URL(pending.url).hostname; } catch { return; }
+    const tail = (h) => h.split(".").slice(-2).join(".");
+    if (tail(location.hostname) !== tail(targetHost)) {
+      console.log(`[job-engine] autofill payload is for ${targetHost}; this is`
+        + ` ${location.hostname} — click the toolbar button to show it here`);
+      return;
+    }
+    showPanel(pending);
+  })();
 })();

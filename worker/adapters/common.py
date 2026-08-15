@@ -1,8 +1,10 @@
 """Helpers shared by the Tier-1 adapters.
 
-Everything here is deterministic: option matching, standard-question
-answering from profile facts, resume download, screenshot upload. No LLM
-calls — an adapter that can't answer from these facts escalates.
+Filling is deterministic: option matching, standard-question answering
+from profile facts, resume download, screenshot upload. No LLM calls in
+the fill path — an adapter that can't answer from these facts escalates.
+The one LLM call here is confirm_submission(), the post-submit judge; it
+runs AFTER the click and can only downgrade an outcome, never fill a form.
 """
 from __future__ import annotations
 
@@ -11,6 +13,9 @@ import os
 import re
 import tempfile
 from datetime import datetime, timezone
+from typing import Literal
+
+from pydantic import BaseModel
 
 log = logging.getLogger("adapter.common")
 
@@ -105,6 +110,141 @@ async def fetch_resume(uid: str, display_name: str,
     except Exception:
         log.exception("resume fetch failed for uid=%s", uid)
         return None
+
+
+SUBMIT_TEXT = re.compile(r"\bsubmit\b|\bsend application\b|\bapply\b", re.I)
+
+# ---------------------------------------------------------------------------
+# Post-submit confirmation: deterministic checks, then an LLM judge.
+# ---------------------------------------------------------------------------
+
+# Deliberately narrow: these phrases essentially never appear before a
+# successful submit. A bare "thank you" is NOT enough — job descriptions
+# say "thank you for your interest", and on a validation-failure page the
+# description is still visible. Anything short of these goes to the judge.
+CONFIRM_RX = re.compile(
+    r"thank you for (applying|your application)"
+    r"|application (has been|was) (submitted|received|sent)"
+    r"|we('| ha)ve received your application", re.I)
+CONFIRM_URL_RX = re.compile(r"/(thanks|thank-you|confirmation|submitted)\b", re.I)
+
+JUDGE_SYSTEM = """You are an impartial auditor of a job-application \
+submission. You are given the text of the page shown immediately after the \
+Submit button was clicked. Decide from the evidence alone — do not assume \
+success. Verdicts:
+- "submitted": the page clearly indicates the application was received \
+(confirmation message, receipt, what-happens-next text).
+- "not_submitted": the application form is still displayed, especially with \
+validation errors or required-field messages.
+- "unclear": anything else.
+confidence is 0-1. reason is one short sentence quoting the decisive \
+evidence."""
+
+
+class SubmitVerdict(BaseModel):
+    verdict: Literal["submitted", "not_submitted", "unclear"]
+    confidence: float = 0.0
+    reason: str = ""
+
+
+async def confirm_submission(page, *, title: str = "", company: str = ""
+                             ) -> tuple[str, str]:
+    """Did the click actually file the application?
+
+    Returns (verdict, reason): 'submitted' | 'not_submitted' | 'unclear'.
+    Free deterministic checks first; the LLM judge only reads the page when
+    they fail. The judge is independent of the fill logic on purpose — the
+    code that did the work doesn't get to grade it. Any judge failure or
+    hesitation degrades to 'unclear' (escalate), never to success or retry.
+    """
+    try:
+        body = await page.evaluate(
+            "() => document.body ? document.body.innerText : ''") or ""
+    except Exception:
+        body = ""
+    if CONFIRM_URL_RX.search(page.url or ""):
+        return "submitted", f"confirmation URL ({page.url})"
+    if CONFIRM_RX.search(body):
+        return "submitted", "confirmation phrase on page"
+    if not body.strip():
+        return "unclear", "post-submit page had no readable text"
+
+    try:
+        from llm import generate_structured
+        v = generate_structured(
+            f"Application submitted for: {title} at {company}\n"
+            f"Page URL after clicking Submit: {page.url}\n\n"
+            f"PAGE TEXT:\n{body[:6000]}",
+            SubmitVerdict,
+            system=JUDGE_SYSTEM,
+            max_tokens=300,
+        )
+    except Exception as exc:
+        log.warning("submission judge unavailable: %s", exc)
+        return "unclear", f"judge unavailable ({type(exc).__name__})"
+    if v.verdict == "submitted" and v.confidence < 0.7:
+        return "unclear", f"judge unsure ({v.confidence:.2f}): {v.reason}"
+    return v.verdict, v.reason or v.verdict
+
+
+async def find_submit_button(page, preferred: list[str]):
+    """The form's real submit control, or None.
+
+    A selector list like "button[type=submit], #submit_app" does NOT try
+    them in order — .first is first in DOM ORDER, so a cookie banner or
+    newsletter button earlier on the page wins. This walks explicit
+    priorities instead: the ATS's known id, then a visible submit-type
+    button whose text actually says submit/apply, then any visible
+    submit-type button.
+    """
+    for sel in preferred:
+        loc = page.locator(sel).first
+        if await loc.count() > 0 and await loc.is_visible():
+            return loc
+    for sel in ("button[type='submit']", "input[type='submit']"):
+        loc = page.locator(sel)
+        for i in range(min(await loc.count(), 20)):
+            b = loc.nth(i)
+            if not await b.is_visible():
+                continue
+            label = ((await b.text_content()) or "") + " " \
+                + ((await b.get_attribute("value")) or "")
+            if SUBMIT_TEXT.search(label):
+                return b
+    for sel in ("button[type='submit']", "input[type='submit']"):
+        loc = page.locator(sel).first
+        if await loc.count() > 0 and await loc.is_visible():
+            return loc
+    return None
+
+
+async def unmark_submit_clicked(uid: str, app_id: str) -> None:
+    """Undo the marker when the click provably did NOT happen (Playwright
+    raises rather than clicking blind), so the job stays safely retryable."""
+    try:
+        from google.cloud import firestore
+        (firestore.Client().collection("users").document(uid)
+         .collection("applications").document(app_id)
+         .update({"submission.submitClickedAt": firestore.DELETE_FIELD}))
+    except Exception:
+        log.exception("could not clear submit-click marker uid=%s app=%s",
+                      uid, app_id)
+
+
+async def mark_submit_clicked(uid: str, app_id: str) -> None:
+    """Record — BEFORE clicking a real Submit button — that this application
+    has been filed. If the worker then crashes or times out, the retried
+    delivery sees this marker and escalates instead of submitting again.
+    Best-effort by necessity, but the click is the point of no return, so
+    this write happens first."""
+    try:
+        from google.cloud import firestore
+        (firestore.Client().collection("users").document(uid)
+         .collection("applications").document(app_id)
+         .update({"submission.submitClickedAt": datetime.now(timezone.utc)}))
+    except Exception:
+        log.exception("could not record submit-click marker uid=%s app=%s",
+                      uid, app_id)
 
 
 async def take_screenshot(page, uid: str, app_id: str, label: str) -> str:

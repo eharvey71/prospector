@@ -194,7 +194,7 @@ export default function ProfilePage() {
 
   if (!user) {
     return (
-      <main style={{ padding: 40 }}>
+      <main className="container">
         <h1>Profile</h1>
         <button style={btnPrimary} onClick={() => signInWithPopup(auth, googleProvider)}>
           Sign in with Google
@@ -204,7 +204,7 @@ export default function ProfilePage() {
   }
 
   return (
-    <main style={{ padding: "24px 40px 40px", maxWidth: 760, margin: "0 auto" }}>
+    <main className="container">
       <Nav active="/profile" />
       <h1>Profile</h1>
       <p style={{ color: T.muted }}>
@@ -213,8 +213,9 @@ export default function ProfilePage() {
         companies to watch and how picky to be lives in Settings.
       </p>
 
-      <section style={box}>
-        <h2>Basics</h2>
+      <details className="panel" open>
+        <summary>Basics</summary>
+        <div className="panelbody">
         <span style={label}>Where are you in your career?</span>
         <select style={input} value={careerStage} onChange={e => setCareerStage(e.target.value)}>
           <option value="entry">Just starting out — score me on education, projects &amp; potential</option>
@@ -247,10 +248,12 @@ export default function ProfilePage() {
         <input style={input} value={salaryTarget} onChange={e => setSalaryTarget(e.target.value)} />
         <span style={label}>Skills (comma-separated)</span>
         <textarea style={{ ...input, height: 70 }} value={skills} onChange={e => setSkills(e.target.value)} />
-      </section>
+      </div>
+      </details>
 
-      <section style={box}>
-        <h2>Standard application answers</h2>
+      <details className="panel">
+        <summary>Standard application answers</summary>
+        <div className="panelbody">
         <p style={{ color: T.muted, fontSize: 13 }}>
           Almost every application asks these. Set them once and the engine
           answers them for you; leave one unset and that question comes back
@@ -269,10 +272,12 @@ export default function ProfilePage() {
           <option value="yes">Yes</option>
           <option value="no">No</option>
         </select>
-      </section>
+      </div>
+      </details>
 
-      <section style={box}>
-        <h2>Resume</h2>
+      <details className="panel">
+        <summary>Resume</summary>
+        <div className="panelbody">
         <p style={{ color: resumeInfo ? T.ok : T.danger }}>
           {resumeInfo || "No resume uploaded — submissions will escalate without one."}
         </p>
@@ -300,10 +305,12 @@ export default function ProfilePage() {
             <button style={btn} onClick={dismissExtraction}>Dismiss</button>
           </div>
         )}
-      </section>
+      </div>
+      </details>
 
-      <section style={box}>
-        <h2>Work history</h2>
+      <details className="panel">
+        <summary>Work history</summary>
+        <div className="panelbody">
         {history.map((r, i) => (
           <div key={i} style={{ ...box, background: T.panelAlt }}>
             <span style={label}>Company</span>
@@ -334,10 +341,12 @@ export default function ProfilePage() {
         <button style={btn} onClick={() => setHistory(h => [...h, { ...EMPTY_ROLE }])}>
           + Add role
         </button>
-      </section>
+      </div>
+      </details>
 
-      <section style={box}>
-        <h2>Education</h2>
+      <details className="panel">
+        <summary>Education</summary>
+        <div className="panelbody">
         <p style={{ color: T.muted, fontSize: 13 }}>
           Degrees, bootcamps, certifications. For early-career matching this
           carries the weight work history carries for veterans.
@@ -370,10 +379,12 @@ export default function ProfilePage() {
         <button style={btn} onClick={() => setEducation(x => [...x, { ...EMPTY_EDU }])}>
           + Add education
         </button>
-      </section>
+      </div>
+      </details>
 
-      <section style={box}>
-        <h2>Projects</h2>
+      <details className="panel">
+        <summary>Projects</summary>
+        <div className="panelbody">
         <p style={{ color: T.muted, fontSize: 13 }}>
           School, personal, volunteer, or open-source work — anything you
           built or ran. Letters and matching can use these as facts.
@@ -398,10 +409,12 @@ export default function ProfilePage() {
         <button style={btn} onClick={() => setProjects(x => [...x, { ...EMPTY_PROJECT }])}>
           + Add project
         </button>
-      </section>
+      </div>
+      </details>
 
-      <section style={box}>
-        <h2>Writing samples</h2>
+      <details className="panel">
+        <summary>Writing samples</summary>
+        <div className="panelbody">
         <p style={{ color: T.muted }}>
           Real prose in your voice — this is what keeps cover letters from
           sounding AI-generated. Emails, blog posts, docs — anything you wrote.
@@ -421,9 +434,10 @@ export default function ProfilePage() {
         <button style={btn} onClick={() => setSamples(x => [...x, { ...EMPTY_SAMPLE }])}>
           + Add sample
         </button>
-      </section>
+      </div>
+      </details>
 
-      <div style={{ position: "sticky", bottom: 0, background: "#15171c", padding: "12px 0" }}>
+      <div className="savebar">
         <button onClick={save} style={{ ...btnPrimary, padding: "10px 24px", fontSize: 16 }}>
           Save profile
         </button>

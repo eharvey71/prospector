@@ -16,6 +16,10 @@ class SubmissionOutcome:
     tier: int
     reason: str | None = None
     escalate: bool = False           # True -> go straight to NEEDS_HUMAN, no retry
+    # True once the adapter has actually clicked the form's Submit button.
+    # A retry after that point would file the same application again, so the
+    # worker escalates for human verification instead of retrying.
+    clicked_submit: bool = False
     screenshots: list[str] = field(default_factory=list)  # Storage paths
     # What was filled/prepared before escalating — the human's checklist:
     # [{"field": label, "value": str|None, "status": "filled"|"needs_you"}]

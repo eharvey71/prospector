@@ -87,6 +87,13 @@ def run_discovery(db: firestore.Client) -> int:
             for board in sorted(boards.get(kind, set())):
                 count += safe(lambda f=fetch, b=board: _upsert_board(db, f(client, b)),
                               label=f"{kind}:{board}")
+        # LinkedIn saved searches: no API, so this rides the logged-out
+        # guest endpoint and ingests each hit through the URL pipeline
+        # (which follows through to the employer's own ATS when offered).
+        # Brittle by nature — isolated like every other source.
+        for query in sorted(boards.get("linkedin", set())):
+            count += safe(lambda q=query: _crawl_linkedin(db, client, q),
+                          label=f"linkedin:{query}")
         # Career pages last — they're the only LLM-dependent source, so an
         # API outage degrades to "no career-page postings this crawl".
         for page_url in sorted(boards.get("custom", set())):
@@ -97,7 +104,7 @@ def run_discovery(db: firestore.Client) -> int:
 
 
 WATCHLIST_FIELDS = ("greenhouse", "lever", "custom", "workday",
-                    "ashby", "smartrecruiters", "workable")
+                    "ashby", "smartrecruiters", "workable", "linkedin")
 
 
 def _collect_watchlists(db: firestore.Client) -> dict[str, set[str]]:
@@ -156,6 +163,67 @@ def _crawl_career_page(db: firestore.Client, client: httpx.Client,
         except Exception as exc:
             log.warning("career page link %s failed: %s", href, exc)
     log.info("career page %s: %d new postings", page_url, count)
+    return count
+
+
+# ---------------------------------------------------------------------------
+# LinkedIn saved searches (logged-out guest endpoint)
+# ---------------------------------------------------------------------------
+
+LINKEDIN_SEARCH = ("https://www.linkedin.com/jobs-guest/jobs/api/"
+                   "seeMoreJobPostings/search")
+LINKEDIN_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+               "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36")
+MAX_LINKEDIN_NEW = 10   # new postings ingested per saved search per crawl
+
+
+def _crawl_linkedin(db: firestore.Client, client: httpx.Client,
+                    query: str) -> int:
+    """Crawl one saved search: 'keywords' or 'keywords | location'.
+
+    LinkedIn publishes no API; this uses the same logged-out endpoint the
+    public job pages call, with no account and no credentials involved.
+    Each new hit goes through create_posting_from_url(), which follows the
+    listing to the employer's own ATS page whenever LinkedIn offers one.
+    Expect this to break when LinkedIn changes their markup — it's isolated
+    so it can fail without touching the rest of the crawl.
+    """
+    keywords, _, location = (p.strip() for p in query.partition("|"))
+    params = {"keywords": keywords, "start": 0}
+    if location:
+        params["location"] = location
+    try:
+        resp = client.get(LINKEDIN_SEARCH, params=params,
+                          headers={"User-Agent": LINKEDIN_UA})
+        resp.raise_for_status()
+    except httpx.HTTPError as exc:
+        log.warning("linkedin search %r failed: %s", query, exc)
+        return 0
+
+    job_ids = list(dict.fromkeys(re.findall(r'data-entity-urn="urn:li:jobPosting:(\d+)"',
+                                            resp.text)))
+    if not job_ids:
+        job_ids = list(dict.fromkeys(re.findall(r"/jobs/view/[^\"']*-(\d{6,})", resp.text)))
+    log.info("linkedin search %r: %d listings", query, len(job_ids))
+
+    from urljob import create_posting_from_url
+    count = 0
+    for job_id in job_ids:
+        if count >= MAX_LINKEDIN_NEW:
+            break
+        url = f"https://www.linkedin.com/jobs/view/{job_id}/"
+        exists = (
+            db.collection("jobPostings")
+            .where(filter=FieldFilter("external_id", "==", url)).limit(1).get()
+        )
+        if exists:
+            continue
+        try:
+            create_posting_from_url(db, url)
+            count += 1
+        except Exception as exc:
+            log.warning("linkedin job %s failed: %s", job_id, exc)
+    log.info("linkedin search %r: %d new postings", query, count)
     return count
 
 

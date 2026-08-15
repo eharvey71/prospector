@@ -11,8 +11,10 @@ Env:
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+from datetime import datetime, timezone
 from typing import Any, Optional, Type, TypeVar
 
 from pydantic import BaseModel
@@ -21,6 +23,39 @@ T = TypeVar("T", bound=BaseModel)
 
 PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic")
 MODEL = os.environ.get("LLM_MODEL", "claude-sonnet-4-6")
+
+log = logging.getLogger("llm")
+
+_health_db = None  # lazy firestore client, shared across calls
+
+
+def _record_usage(input_tokens: int, output_tokens: int,
+                  error: str | None = None) -> None:
+    """Best-effort spend/error accounting into the global `health`
+    collection (cumulative doc + per-day doc). The engine hit a provider
+    spend cap once with zero visibility — never again. Must never break a
+    real call."""
+    global _health_db
+    try:
+        from google.cloud import firestore
+        if _health_db is None:
+            _health_db = firestore.Client()
+        now = datetime.now(timezone.utc)
+        counters: dict[str, Any] = {
+            "calls": firestore.Increment(1),
+            "input_tokens": firestore.Increment(input_tokens),
+            "output_tokens": firestore.Increment(output_tokens),
+            "lastCallAt": now,
+        }
+        if error:
+            counters["errors"] = firestore.Increment(1)
+            counters["lastErrorAt"] = now
+            counters["lastError"] = error[:300]
+        _health_db.collection("health").document("llm").set(counters, merge=True)
+        _health_db.collection("health").document(
+            f"llm_{now.strftime('%Y%m%d')}").set(counters, merge=True)
+    except Exception:
+        log.debug("llm usage recording failed", exc_info=True)
 
 
 def generate(
@@ -32,10 +67,18 @@ def generate(
 ) -> str:
     """Single-turn text generation."""
     if PROVIDER == "anthropic":
-        return _anthropic(prompt, system, max_tokens, temperature)
-    if PROVIDER == "vertex":
-        return _vertex(prompt, system, max_tokens, temperature)
-    raise ValueError(f"Unknown LLM_PROVIDER: {PROVIDER}")
+        fn = _anthropic
+    elif PROVIDER == "vertex":
+        fn = _vertex
+    else:
+        raise ValueError(f"Unknown LLM_PROVIDER: {PROVIDER}")
+    try:
+        text, tokens_in, tokens_out = fn(prompt, system, max_tokens, temperature)
+    except Exception as exc:
+        _record_usage(0, 0, error=f"{type(exc).__name__}: {exc}")
+        raise
+    _record_usage(tokens_in, tokens_out)
+    return text
 
 
 def generate_structured(
@@ -78,7 +121,8 @@ def _strip_fences(text: str) -> str:
 # Providers
 # ---------------------------------------------------------------------------
 
-def _anthropic(prompt: str, system: Optional[str], max_tokens: int, temperature: float) -> str:
+def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
+               temperature: float) -> tuple[str, int, int]:
     import anthropic
 
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
@@ -91,10 +135,15 @@ def _anthropic(prompt: str, system: Optional[str], max_tokens: int, temperature:
     if system:
         kwargs["system"] = system
     resp = client.messages.create(**kwargs)
-    return "".join(block.text for block in resp.content if block.type == "text")
+    text = "".join(block.text for block in resp.content if block.type == "text")
+    usage = getattr(resp, "usage", None)
+    return (text,
+            getattr(usage, "input_tokens", 0) or 0,
+            getattr(usage, "output_tokens", 0) or 0)
 
 
-def _vertex(prompt: str, system: Optional[str], max_tokens: int, temperature: float) -> str:
+def _vertex(prompt: str, system: Optional[str], max_tokens: int,
+            temperature: float) -> tuple[str, int, int]:
     from google import genai
     from google.genai import types
 
@@ -112,4 +161,7 @@ def _vertex(prompt: str, system: Optional[str], max_tokens: int, temperature: fl
             temperature=temperature,
         ),
     )
-    return resp.text or ""
+    meta = getattr(resp, "usage_metadata", None)
+    return (resp.text or "",
+            getattr(meta, "prompt_token_count", 0) or 0,
+            getattr(meta, "candidates_token_count", 0) or 0)

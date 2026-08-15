@@ -21,9 +21,9 @@ export default function SettingsPage() {
   const [remoteOnly, setRemoteOnly] = useState(false);
   const [excludeCompanies, setExcludeCompanies] = useState("");
   const [minScore, setMinScore] = useState(70);
-  const [autoDraft, setAutoDraft] = useState(true);
+  const [autoDraft, setAutoDraft] = useState(false);
   const [salaryStrategy, setSalaryStrategy] = useState("exact");
-  const [tailorResume, setTailorResume] = useState(true);
+  const [tailorResume, setTailorResume] = useState(false);
   const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
   const [leverBoards, setLeverBoards] = useState("");
   const [customPages, setCustomPages] = useState(""); // career page URLs
@@ -31,6 +31,7 @@ export default function SettingsPage() {
   const [ashbyBoards, setAshbyBoards] = useState("");
   const [srBoards, setSrBoards] = useState("");       // smartrecruiters ids
   const [workableBoards, setWorkableBoards] = useState("");
+  const [linkedinSearches, setLinkedinSearches] = useState("");
   const [suggestRole, setSuggestRole] = useState("");
   const [suggesting, setSuggesting] = useState(false);
   const [suggestions, setSuggestions] = useState([]); // verified boards
@@ -52,9 +53,9 @@ export default function SettingsPage() {
         setRemoteOnly(!!p.remote_only);
         setExcludeCompanies((p.exclude_companies || []).join(", "));
         setMinScore(p.min_match_score ?? 70);
-        setAutoDraft(p.auto_draft ?? true);
+        setAutoDraft(p.auto_draft ?? false);
         setSalaryStrategy(p.salary_strategy || "exact");
-        setTailorResume(p.tailor_resume ?? true);
+        setTailorResume(p.tailor_resume ?? false);
       }
       const wl = await getDoc(doc(db, "users", user.uid, "watchlist", "companies"));
       if (wl.exists()) {
@@ -65,6 +66,7 @@ export default function SettingsPage() {
         setAshbyBoards((wl.data().ashby || []).join(", "));
         setSrBoards((wl.data().smartrecruiters || []).join(", "));
         setWorkableBoards((wl.data().workable || []).join(", "));
+        setLinkedinSearches((wl.data().linkedin || []).join(", "));
       }
     })();
   }, [user]);
@@ -94,6 +96,7 @@ export default function SettingsPage() {
       ashby: csv(ashbyBoards),
       smartrecruiters: csv(srBoards),
       workable: csv(workableBoards),
+      linkedin: csv(linkedinSearches),
     });
     setStatus("Saved ✓");
     setTimeout(() => setStatus(""), 2500);
@@ -118,6 +121,7 @@ export default function SettingsPage() {
         setAshbyBoards((wl.data().ashby || []).join(", "));
         setSrBoards((wl.data().smartrecruiters || []).join(", "));
         setWorkableBoards((wl.data().workable || []).join(", "));
+        setLinkedinSearches((wl.data().linkedin || []).join(", "));
       }
       setTrackName("");
     } catch (e) {
@@ -159,9 +163,9 @@ export default function SettingsPage() {
 
   if (!user) {
     return (
-      <main style={{ padding: 40 }}>
+      <main className="container">
         <h1>Settings</h1>
-        <button style={btnPrimary} onClick={() => signInWithPopup(auth, googleProvider)}>
+        <button className="btn-primary" onClick={() => signInWithPopup(auth, googleProvider)}>
           Sign in with Google
         </button>
       </main>
@@ -169,185 +173,213 @@ export default function SettingsPage() {
   }
 
   return (
-    <main style={{ padding: "24px 40px 40px", maxWidth: 760, margin: "0 auto" }}>
+    <main className="container">
       <Nav active="/settings" />
       <h1>Settings</h1>
       <p style={{ color: T.muted }}>
-        How the engine searches: which companies it watches, what counts as a
-        match, and whether letters are drafted automatically. Who you are —
-        resume, work history, skills — is on the Profile page.
+        Set up in order, top to bottom: say what you want, find companies,
+        check the boards being watched, then tune how picky the engine is.
+        Who you are — resume, work history, skills — is on the Profile page.
       </p>
 
-      <section style={box}>
-        <h2>Matching</h2>
-        <span style={label}>Target titles (comma-separated)</span>
-        <input style={input} value={titles} onChange={e => setTitles(e.target.value)} />
-        <span style={label}>
-          Title synonyms — auto-generated when your titles change; prune
-          freely, anything here widens what counts as a title match
-        </span>
-        <textarea style={{ ...input, height: 70 }} value={titleSynonyms}
-                  onChange={e => setTitleSynonyms(e.target.value)}
-                  placeholder="(generated about a minute after you save new titles)" />
-        <span style={label}>Exclude companies (comma-separated)</span>
-        <input style={input} value={excludeCompanies} onChange={e => setExcludeCompanies(e.target.value)} />
-        <span style={label}>Minimum match score (0-100)</span>
-        <input style={input} type="number" min="0" max="100" value={minScore}
-               onChange={e => setMinScore(e.target.value)} />
-        <p style={{ color: T.warn, fontSize: 13, marginTop: -6 }}>
-          Every crawled posting scoring at or above this becomes a match.
-          With auto-draft ON, each match immediately gets a cover letter
-          written (several LLM calls each) — lower this carefully.
-        </p>
-        <span style={label}>When a form asks for salary expectations</span>
-        <select style={input} value={salaryStrategy}
-                onChange={e => setSalaryStrategy(e.target.value)}>
-          <option value="exact">State my target exactly</option>
-          <option value="range">Give a range around my target</option>
-          <option value="negotiable">Say it&apos;s negotiable — no number</option>
-        </select>
-        <p style={{ color: T.muted, fontSize: 13, marginTop: -6 }}>
-          A number above the company&apos;s budget can auto-reject you before a
-          human ever looks. A range or &quot;negotiable&quot; keeps you in play;
-          your target itself is set on the Profile page.
-        </p>
-        <label style={{ display: "block", marginBottom: 8 }}>
-          <input type="checkbox" checked={tailorResume}
-                 onChange={e => setTailorResume(e.target.checked)} /> Tailor my
-          resume for each application <span style={{ color: T.muted, fontSize: 13 }}>
-          (a per-job PDF built from your profile facts — reordered and reworded
-          toward the posting, nothing invented. Off: your uploaded resume.pdf
-          goes everywhere.)</span>
-        </label>
-        <label style={{ display: "block", marginBottom: 8 }}>
-          <input type="checkbox" checked={autoDraft}
-                 onChange={e => setAutoDraft(e.target.checked)} /> Draft letters
-          automatically <span style={{ color: T.muted, fontSize: 13 }}>
-          (off: matches wait in the Matches tab and you pick which get letters)</span>
-        </label>
-        <label style={{ display: "block", marginBottom: 8 }}>
-          <input type="checkbox" checked={remoteOnly}
-                 onChange={e => setRemoteOnly(e.target.checked)} /> Remote only
-        </label>
-      </section>
-
-      <section style={box}>
-        <h2>Company watchlist</h2>
-
-        <h3 style={{ marginTop: 0 }}>Track a company by name</h3>
-        <p style={{ color: T.muted, fontSize: 13 }}>
-          Type a company (e.g. Acme Corp). The engine finds how they run job
-          applications and sets up what it can — no need to know their ATS.
-        </p>
-        <div style={{ display: "flex", gap: 8 }}>
-          <input style={{ ...input, margin: 0 }} value={trackName}
-                 placeholder="Company name"
-                 onChange={e => setTrackName(e.target.value)}
-                 onKeyDown={e => e.key === "Enter" && trackCompany()} />
-          <button style={btnPrimary} disabled={tracking} onClick={trackCompany}>
-            {tracking ? "Resolving…" : "Track"}
-          </button>
+      {/* ------------------------------------------------ step 1 */}
+      <details className="panel tint-blue" open>
+        <summary><span className="stepnum blue">1</span> What you&apos;re looking for</summary>
+        <div className="panelbody">
+          <span className="field-label">Target titles (comma-separated)</span>
+          <input value={titles} onChange={e => setTitles(e.target.value)}
+                 placeholder="e.g. grant writer, development officer" />
+          <span className="field-label">
+            Title synonyms — generated automatically about a minute after you
+            save new titles; prune freely (anything here counts as a title match)
+          </span>
+          <textarea style={{ height: 70 }} value={titleSynonyms}
+                    onChange={e => setTitleSynonyms(e.target.value)}
+                    placeholder="(generated after you save new titles)" />
+          <span className="field-label">Exclude companies (comma-separated)</span>
+          <input value={excludeCompanies} onChange={e => setExcludeCompanies(e.target.value)} />
+          <label style={{ display: "block", marginTop: 12 }}>
+            <input type="checkbox" checked={remoteOnly}
+                   onChange={e => setRemoteOnly(e.target.checked)} /> Remote only
+          </label>
         </div>
-        {trackResults.map((r, i) => {
-          const color = r.status === "auto" ? T.ok
-            : r.status === "tracked" ? T.accent
-            : r.status === "manual" ? T.warn : T.danger;
-          const tag = r.status === "auto" ? "✓ automated"
-            : r.status === "tracked" ? "tracking"
-            : r.status === "manual" ? "manual submit"
-            : r.status === "not_found" ? "not found" : "error";
-          return (
-            <div key={i} style={{ borderLeft: `3px solid ${color}`, padding: "6px 10px", margin: "8px 0", background: T.panelAlt, borderRadius: 4 }}>
-              <strong>{r.company}</strong>{" "}
-              <span style={{ color, fontSize: 13 }}>{tag}</span>
-              <div style={{ color: T.muted, fontSize: 13 }}>{r.detail}</div>
-            </div>
-          );
-        })}
+      </details>
 
-        <h3 style={{ marginTop: 24 }}>Or enter boards manually</h3>
-        <span style={label}>Greenhouse board slugs (comma-separated — the SLUG in boards.greenhouse.io/SLUG)</span>
-        <input style={input} value={ghBoards} onChange={e => setGhBoards(e.target.value)} />
-        <span style={label}>Lever board slugs (jobs.lever.co/SLUG)</span>
-        <input style={input} value={leverBoards} onChange={e => setLeverBoards(e.target.value)} />
-        <span style={label}>
-          Career page URLs (comma-separated — for companies not on Greenhouse/Lever;
-          each crawl finds new postings on these pages. JavaScript-only pages can&apos;t be read.)
-        </span>
-        <input style={input} value={customPages} onChange={e => setCustomPages(e.target.value)}
-               placeholder="https://example.com/careers, https://…" />
-        <span style={label}>
-          Workday career sites (comma-separated myworkdayjobs.com URLs — jobs are
-          discovered and drafted; Workday submission stays manual)
-        </span>
-        <input style={input} value={workdaySites} onChange={e => setWorkdaySites(e.target.value)}
-               placeholder="https://company.wd5.myworkdayjobs.com/External" />
-        <span style={label}>Ashby boards (jobs.ashbyhq.com/SLUG)</span>
-        <input style={input} value={ashbyBoards} onChange={e => setAshbyBoards(e.target.value)} />
-        <span style={label}>SmartRecruiters companies (careers.smartrecruiters.com/COMPANY — case matters)</span>
-        <input style={input} value={srBoards} onChange={e => setSrBoards(e.target.value)} />
-        <span style={label}>Workable boards (apply.workable.com/SLUG)</span>
-        <input style={input} value={workableBoards} onChange={e => setWorkableBoards(e.target.value)} />
-
-        <h3 style={{ marginTop: 20 }}>Find companies for me</h3>
-        <p style={{ color: T.muted, fontSize: 13 }}>
-          Describe the role you want; the engine proposes companies and only
-          shows ones with a live, supported job board. Adding one puts it in
-          the fields above — hit Save settings to keep it.
-        </p>
-        <textarea
-          style={{ ...input, height: 60 }}
-          placeholder="e.g. entry-level marketing coordinator roles at consumer brands, remote-friendly"
-          value={suggestRole}
-          onChange={e => setSuggestRole(e.target.value)}
-        />
-        <button style={btnPrimary} disabled={suggesting} onClick={findCompanies}>
-          {suggesting ? "Searching… (can take a minute)" : "Suggest companies"}
-        </button>
-        {suggestions.map(s => (
-          <div key={s.slug} style={{
-            display: "flex", alignItems: "center", gap: 12,
-            background: T.panelAlt, border: `1px solid ${T.border}`,
-            borderRadius: 6, padding: "8px 12px", marginTop: 8,
-          }}>
-            <div style={{ flex: 1 }}>
-              <strong>{s.company}</strong>{" "}
-              <span style={{ color: T.muted, fontSize: 13 }}>
-                {s.ats} · {s.jobs} open roles
-                {s.ats === "workday" && " · found & drafted for you, you submit"}
-              </span>
-              <div style={{ color: T.muted, fontSize: 12 }}>
-                {(s.sample_titles || []).filter(Boolean).join(" · ")}
-              </div>
-            </div>
-            <button style={btn} onClick={() => addSuggestion(s)}>Add</button>
+      {/* ------------------------------------------------ step 2 */}
+      <details className="panel tint-green">
+        <summary><span className="stepnum green">2</span> Find companies to watch</summary>
+        <div className="panelbody">
+          <p className="hint" style={{ marginTop: 8 }}>
+            Everything you Add or Track here is written into step 3&apos;s lists
+            automatically — finish with Save settings to keep it.
+          </p>
+          <span className="field-label">Describe the role you want</span>
+          <textarea style={{ height: 60 }}
+            placeholder="e.g. entry-level marketing coordinator roles at consumer brands, remote-friendly"
+            value={suggestRole}
+            onChange={e => setSuggestRole(e.target.value)} />
+          <div className="actions">
+            <button className="btn-primary" disabled={suggesting} onClick={findCompanies}>
+              {suggesting ? "Searching… (can take a minute)" : "Suggest companies"}
+            </button>
           </div>
-        ))}
-        {unverified.length > 0 && (
-          <>
-            <p style={{ color: T.muted, fontSize: 13, marginTop: 16, marginBottom: 4 }}>
-              Also likely fits, but no supported job board was found
-              automatically. Track resolves each one properly (careers-page
-              detection included):
-            </p>
-            {unverified.map((name) => (
-              <div key={name} style={{
-                display: "flex", alignItems: "center", gap: 12,
-                background: T.panelAlt, border: `1px solid ${T.border}`,
-                borderRadius: 6, padding: "6px 12px", marginTop: 6,
-              }}>
-                <strong style={{ flex: 1 }}>{name}</strong>
-                <button style={btn} disabled={tracking}
-                        onClick={() => trackCompany(name)}>
-                  {tracking ? "…" : "Track"}
-                </button>
+          {suggestions.map(s => (
+            <div key={s.slug} className="subcard"
+                 style={{ display: "flex", alignItems: "center", gap: 12 }}>
+              <div style={{ flex: 1 }}>
+                <strong>{s.company}</strong>{" "}
+                <span className="hint" style={{ display: "inline" }}>
+                  {s.ats} · {s.jobs} open roles
+                  {s.ats === "workday" && " · letters prepped, you apply on their site"}
+                </span>
+                <div className="hint">
+                  {(s.sample_titles || []).filter(Boolean).join(" · ")}
+                </div>
               </div>
-            ))}
-          </>
-        )}
-      </section>
+              <button className="btn" onClick={() => addSuggestion(s)}>Add</button>
+            </div>
+          ))}
+          {unverified.length > 0 && (
+            <>
+              <p className="hint" style={{ marginTop: 14 }}>
+                Also likely fits, but no supported job board was found
+                automatically — Track resolves each one (career-page detection
+                included):
+              </p>
+              {unverified.map((name) => (
+                <div key={name} className="subcard"
+                     style={{ display: "flex", alignItems: "center", gap: 12,
+                              padding: "6px 12px" }}>
+                  <strong style={{ flex: 1 }}>{name}</strong>
+                  <button className="btn" disabled={tracking}
+                          onClick={() => trackCompany(name)}>
+                    {tracking ? "…" : "Track"}
+                  </button>
+                </div>
+              ))}
+            </>
+          )}
 
-      <div style={{ position: "sticky", bottom: 0, background: "#15171c", padding: "12px 0" }}>
+          <div className="orline">or track a specific company by name</div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <input value={trackName}
+                   placeholder="Company name — the engine figures out how they hire"
+                   onChange={e => setTrackName(e.target.value)}
+                   onKeyDown={e => e.key === "Enter" && trackCompany()} />
+            <button className="btn-primary" disabled={tracking} onClick={() => trackCompany()}>
+              {tracking ? "Resolving…" : "Track"}
+            </button>
+          </div>
+          {trackResults.map((r, i) => {
+            const color = r.status === "auto" ? "var(--ok)"
+              : r.status === "tracked" ? "var(--accent)"
+              : r.status === "manual" ? "var(--warn)" : "var(--danger)";
+            const tag = r.status === "auto" ? "✓ automated"
+              : r.status === "tracked" ? "tracking"
+              : r.status === "manual" ? "manual submit"
+              : r.status === "not_found" ? "not found" : "error";
+            return (
+              <div key={i} className="subcard"
+                   style={{ borderLeft: `3px solid ${color}`, padding: "6px 10px" }}>
+                <strong>{r.company}</strong>{" "}
+                <span style={{ color, fontSize: 13 }}>{tag}</span>
+                <div className="hint">{r.detail}</div>
+              </div>
+            );
+          })}
+        </div>
+      </details>
+
+      {/* ------------------------------------------------ step 3 */}
+      <details className="panel tint-purple">
+        <summary><span className="stepnum purple">3</span> Boards being watched</summary>
+        <div className="panelbody">
+          <p className="hint" style={{ marginTop: 8 }}>
+            Filled automatically by step 2 — edit or prune freely. Every crawl
+            (every 6 hours) pulls fresh jobs from all of these.
+          </p>
+          <p className="grouphead">Fully automated — the engine can submit for you</p>
+          <span className="field-label">Greenhouse (the SLUG in boards.greenhouse.io/SLUG)</span>
+          <input value={ghBoards} onChange={e => setGhBoards(e.target.value)} />
+          <span className="field-label">Lever (jobs.lever.co/SLUG)</span>
+          <input value={leverBoards} onChange={e => setLeverBoards(e.target.value)} />
+          <span className="field-label">Ashby (jobs.ashbyhq.com/SLUG)</span>
+          <input value={ashbyBoards} onChange={e => setAshbyBoards(e.target.value)} />
+          <span className="field-label">SmartRecruiters (careers.smartrecruiters.com/COMPANY — case matters)</span>
+          <input value={srBoards} onChange={e => setSrBoards(e.target.value)} />
+          <span className="field-label">Workable (apply.workable.com/SLUG)</span>
+          <input value={workableBoards} onChange={e => setWorkableBoards(e.target.value)} />
+
+          <p className="grouphead">Watched — the engine preps the application, you apply on the company site</p>
+          <span className="field-label">
+            Workday career sites (full myworkdayjobs.com URLs). Workday requires
+            a personal account, so the engine finds the jobs and writes the
+            letter — the final application on their site is yours.
+          </span>
+          <input value={workdaySites} onChange={e => setWorkdaySites(e.target.value)}
+                 placeholder="https://company.wd5.myworkdayjobs.com/External" />
+
+          <p className="grouphead">LinkedIn saved searches — jobs found, then followed to the employer&apos;s own site</p>
+          <span className="field-label">
+            Searches, comma-separated. Use &quot;keywords | location&quot; to add a
+            place (e.g. grant writer | Richmond, VA). No LinkedIn account is
+            used — the engine reads the public listings and, where a posting
+            links out to the company&apos;s own application site, follows it there.
+          </span>
+          <input value={linkedinSearches} onChange={e => setLinkedinSearches(e.target.value)}
+                 placeholder="grant writer | Richmond VA, development director | remote" />
+
+          <p className="grouphead">Career pages — crawled for job links</p>
+          <span className="field-label">
+            Careers page URLs (for companies on no supported board; JavaScript-only
+            pages can&apos;t be read)
+          </span>
+          <input value={customPages} onChange={e => setCustomPages(e.target.value)}
+                 placeholder="https://example.com/careers, https://…" />
+        </div>
+      </details>
+
+      {/* ------------------------------------------------ step 4 */}
+      <details className="panel tint-amber">
+        <summary><span className="stepnum amber">4</span> Matching &amp; drafting behavior</summary>
+        <div className="panelbody">
+          <span className="field-label">Minimum match score (0–100)</span>
+          <input type="number" min="0" max="100" value={minScore}
+                 onChange={e => setMinScore(e.target.value)} />
+          <p className="hint" style={{ color: "var(--warn)" }}>
+            Every crawled posting scoring at or above this becomes a match.
+            With auto-draft ON, each match immediately gets a cover letter
+            written (several LLM calls each) — lower this carefully.
+          </p>
+          <label style={{ display: "block", marginTop: 12 }}>
+            <input type="checkbox" checked={autoDraft}
+                   onChange={e => setAutoDraft(e.target.checked)} /> Draft letters
+            automatically <span className="hint" style={{ display: "inline" }}>
+            (off: matches wait in the Matches tab and you pick which get letters)</span>
+          </label>
+          <label style={{ display: "block", marginTop: 8 }}>
+            <input type="checkbox" checked={tailorResume}
+                   onChange={e => setTailorResume(e.target.checked)} /> Tailor my
+            resume for each application <span className="hint" style={{ display: "inline" }}>
+            (a per-job PDF built from your profile facts — nothing invented.
+            Off: your uploaded resume.pdf goes everywhere.)</span>
+          </label>
+          <span className="field-label">When a form asks for salary expectations</span>
+          <select value={salaryStrategy}
+                  onChange={e => setSalaryStrategy(e.target.value)}>
+            <option value="exact">State my target exactly</option>
+            <option value="range">Give a range around my target</option>
+            <option value="negotiable">Say it&apos;s negotiable — no number</option>
+          </select>
+          <p className="hint">
+            A number above the company&apos;s budget can auto-reject you before a
+            human ever looks. A range or &quot;negotiable&quot; keeps you in play;
+            your target itself is set on the Profile page.
+          </p>
+        </div>
+      </details>
+
+      <div className="savebar">
         <button onClick={save} style={{ ...btnPrimary, padding: "10px 24px", fontSize: 16 }}>
           Save settings
         </button>

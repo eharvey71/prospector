@@ -59,6 +59,20 @@ def _db() -> firestore.Client:
     return firestore.Client()
 
 
+def _health_error(kind: str, exc: Exception) -> None:
+    """Count pipeline errors into the global health doc the UI surfaces.
+    Best-effort — must never mask the original failure."""
+    from datetime import datetime, timezone
+    try:
+        _db().collection("health").document("errors").set({
+            kind: firestore.Increment(1),
+            "lastErrorAt": datetime.now(timezone.utc),
+            "lastError": f"{kind}: {exc}"[:300],
+        }, merge=True)
+    except Exception:
+        log.debug("health error recording failed", exc_info=True)
+
+
 # ---------------------------------------------------------------------------
 # Discovery (scheduled)
 # ---------------------------------------------------------------------------
@@ -68,8 +82,18 @@ def _db() -> firestore.Client:
 def crawl_boards(event: scheduler_fn.ScheduledEvent) -> None:
     # Needs the LLM secret because custom career-page crawling classifies
     # links with generate_structured (see discovery._crawl_career_page).
+    from datetime import datetime, timezone
     from discovery import run_discovery
-    run_discovery(_db())
+    db = _db()
+    ref = db.collection("health").document("crawl")
+    try:
+        n = run_discovery(db)
+        ref.set({"lastRunAt": datetime.now(timezone.utc), "ok": True,
+                 "postings": n, "error": None})
+    except Exception as exc:
+        ref.set({"lastRunAt": datetime.now(timezone.utc), "ok": False,
+                 "error": str(exc)[:500]}, merge=True)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -98,8 +122,9 @@ def on_posting_written(event: firestore_fn.Event) -> None:
     for user_doc in db.collection("users").stream():
         try:
             match_posting_for_user(db, user_doc.id, posting_id, posting)
-        except Exception:
+        except Exception as exc:
             log.exception("matching failed uid=%s posting=%s", user_doc.id, posting_id)
+            _health_error("matching", exc)
 
 
 # ---------------------------------------------------------------------------
@@ -280,14 +305,20 @@ def on_application_written(event: firestore_fn.Event) -> None:
         # "write the letter" (request_draft). User-pasted jobs always draft.
         prefs = (db.collection("users").document(uid).get().to_dict()
                  or {}).get("preferences") or {}
-        if not prefs.get("auto_draft", True) and not after.get("user_added"):
+        # auto_draft is about SPEND and applies to every match, including
+        # ones the user added by URL. (user_added bypasses the score gate in
+        # matching.py — that's a separate thing: the job is wanted
+        # regardless of score. It must not also authorize LLM spend the
+        # user switched off.)
+        if not prefs.get("auto_draft", False):
             log.info("auto_draft off; app %s waits in matched", app_id)
             return
         from drafting import draft_application
         try:
             draft_application(db, uid, app_id)
-        except Exception:
+        except Exception as exc:
             log.exception("drafting failed uid=%s app=%s", uid, app_id)
+            _health_error("drafting", exc)
             advance(db, uid, app_id, AppState.MATCHED, AppState.FAILED,
                     note="drafting error; see logs")
 
