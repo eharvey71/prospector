@@ -375,7 +375,9 @@ export default function ReviewQueue() {
   }, [matches, apps, escalated]);
 
   async function addJob(urlArg) {
-    const url = (urlArg ?? jobUrl).trim();
+    // Guard: onClick handlers receive the click EVENT as the first arg —
+    // only a real string counts as a URL override.
+    const url = (typeof urlArg === "string" ? urlArg : jobUrl).trim();
     if (!url) return;
     setAddStatus("Reading the posting… (up to a minute)");
     try {
@@ -630,7 +632,7 @@ export default function ReviewQueue() {
           onChange={e => setJobUrl(e.target.value)}
           onKeyDown={e => e.key === "Enter" && addJob()}
         />
-        <button className="btn-primary" onClick={addJob}>Add job</button>
+        <button className="btn-primary" onClick={() => addJob()}>Add job</button>
       </div>
       {addStatus && <p className="hint" style={{ marginBottom: 10 }}>{addStatus}</p>}
       {funnel && (

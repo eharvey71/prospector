@@ -127,6 +127,52 @@ def resolve_linkedin(url: str) -> tuple[str, str]:
     return url, text
 
 
+BAMBOO_RX = re.compile(r"https?://([\w-]+)\.bamboohr\.com/careers/(\d+)", re.I)
+
+
+def resolve_bamboohr(url: str) -> Optional[tuple[str, str, Optional[str], str]]:
+    """BambooHR careers pages are JS-rendered shells with no readable text;
+    the posting itself is served from a public JSON endpoint. Returns
+    (company, title, location, description_text), or None when the URL
+    isn't BambooHR or the endpoint doesn't cooperate — the caller then
+    falls back to the generic fetch and its honest error."""
+    m = BAMBOO_RX.search(url)
+    if not m:
+        return None
+    sub, jid = m.group(1), m.group(2)
+    try:
+        resp = httpx.get(
+            f"https://{sub}.bamboohr.com/careers/{jid}/detail",
+            timeout=HTTP_TIMEOUT, follow_redirects=True,
+            headers={"User-Agent": BROWSER_UA, "Accept": "application/json"})
+        resp.raise_for_status()
+        data = resp.json()
+    except Exception as exc:
+        log.warning("bamboohr detail fetch failed for %s: %s", url, exc)
+        return None
+    # Observed nestings: {result: {jobOpening: {...}}} / {result: {...}} /
+    # flat. Walk down whatever is there.
+    j = data.get("result") if isinstance(data.get("result"), dict) else data
+    if isinstance(j, dict) and isinstance(j.get("jobOpening"), dict):
+        j = j["jobOpening"]
+    if not isinstance(j, dict):
+        return None
+    title = str(j.get("jobOpeningName") or j.get("title") or "").strip()
+    desc = _strip_html(unescape(str(j.get("description") or "")))
+    loc = j.get("location")
+    if isinstance(loc, dict):
+        location = ", ".join(
+            x for x in (loc.get("city"), loc.get("state")) if x) or None
+    else:
+        location = (str(loc).strip() or None) if loc else None
+    company = str(j.get("companyName") or sub).strip()
+    if not title or len(desc) < 80:
+        log.warning("bamboohr %s: unusable payload (title=%r, %d chars)",
+                    url, title, len(desc))
+        return None
+    return company, title, location, desc[:20_000]
+
+
 def _infer_source(url: str) -> AtsType:
     """Hosted Greenhouse/Lever postings get their Tier-1 adapter even when
     found via a career page or pasted by hand."""
@@ -154,6 +200,14 @@ def create_posting_from_url(db, url: str) -> tuple[str, dict]:
             # rather than failing, and let the human apply there.
             return _upsert_from_text(db, url, linkedin_text)
 
+    # BambooHR: the page is an empty JS shell, but the posting is public
+    # JSON — no fetch-and-guess, no LLM extraction needed.
+    bamboo = resolve_bamboohr(url)
+    if bamboo:
+        company, title, location, text = bamboo
+        return _upsert(db, url, company=company, title=title,
+                       location=location, text=text)
+
     try:
         resp = httpx.get(url, timeout=HTTP_TIMEOUT, follow_redirects=True,
                          headers={"User-Agent": "job-engine/0.1"})
@@ -173,6 +227,23 @@ def create_posting_from_url(db, url: str) -> tuple[str, dict]:
     return _upsert_from_text(db, url, text, page_title=_page_title(resp.text))
 
 
+def _upsert(db, url: str, *, company: str, title: str,
+            location: Optional[str], text: str) -> tuple[str, dict]:
+    posting = JobPosting(
+        source=_infer_source(url),
+        external_id=url,
+        company=company,
+        title=title,
+        url=url,
+        location=location,
+        description_text=text,
+    )
+    doc = posting.model_dump(mode="json")
+    db.collection("jobPostings").document(posting.posting_id).set(doc, merge=True)
+    log.info("user-added posting %s: %s @ %s", posting.posting_id, title, company)
+    return posting.posting_id, doc
+
+
 def _upsert_from_text(db, url: str, text: str,
                       page_title: Optional[str] = None) -> tuple[str, dict]:
     """Extract facts from posting text and upsert the posting."""
@@ -183,19 +254,10 @@ def _upsert_from_text(db, url: str, text: str,
         system=EXTRACT_SYSTEM,
         max_tokens=300,
     )
-    company = (facts.company or httpx.URL(url).host or "unknown").strip()
-
-    posting = JobPosting(
-        source=_infer_source(url),
-        external_id=url,
-        company=company,
+    return _upsert(
+        db, url,
+        company=(facts.company or httpx.URL(url).host or "unknown").strip(),
         title=(facts.title or "").strip() or page_title or "(title not found)",
-        url=url,
         location=facts.location,
-        description_text=text,
+        text=text,
     )
-    doc = posting.model_dump(mode="json")
-    db.collection("jobPostings").document(posting.posting_id).set(doc, merge=True)
-    log.info("user-added posting %s: %s @ %s", posting.posting_id,
-             posting.title, company)
-    return posting.posting_id, doc
