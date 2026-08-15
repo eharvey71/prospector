@@ -520,16 +520,24 @@ export default function ReviewQueue() {
       ],
     };
     let acked = false;
+    let stale = false;
     const onAck = (ev) => {
       if (ev.data?.type === "JOB_ENGINE_AUTOFILL_ACK") acked = true;
+      if (ev.data?.type === "JOB_ENGINE_EXTENSION_STALE") stale = true;
     };
     window.addEventListener("message", onAck);
     window.postMessage({ type: "JOB_ENGINE_AUTOFILL", payload }, "*");
     // Give the extension a moment to store the payload, then open the
-    // posting REGARDLESS — the user asked to open a job; a missing
-    // extension is a reason to warn, not to do nothing.
+    // posting — but NOT when the handoff failed: an extension holding a
+    // previous job's answers on the new posting is worse than a warning.
     setTimeout(() => {
       window.removeEventListener("message", onAck);
+      if (stale) {
+        setAddStatus("The extension was updated since this tab loaded, so "
+          + "it couldn't take the answers. RELOAD THIS TAB and click "
+          + "Open & autofill again.");
+        return;
+      }
       window.open(p.url, "_blank");
       if (!acked) {
         setAddStatus("Opened the posting, but the autofill extension isn't "

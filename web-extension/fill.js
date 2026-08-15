@@ -25,7 +25,15 @@
     if (MONEY.test(l) && !MONEY.test(f)) return false;
     if (f === l) return true;
     const ft = f.split(" "), lt = l.split(" ");
-    if (ft.every((t) => lt.includes(t))) return ft.length >= 3 || lt.length <= 6;
+    if (ft.every((t) => lt.includes(t))) {
+      if (ft.length >= 3 || lt.length <= 6) return true;
+      // The field as a contiguous phrase inside a longer question:
+      // "full name" in "welcome please enter your full name". Two-word
+      // minimum so a bare "name" can't match every question containing
+      // it; scattered tokens in a long label stay unmatched.
+      if (ft.length >= 2 && l.includes(f)) return true;
+      return false;
+    }
     return f.length >= 15 && (l.includes(f) || f.includes(l));
   }
 
@@ -41,9 +49,18 @@
     }
     let n = el;
     for (let d = 0; d < 5 && n; d++) {
-      n = n.parentElement;
-      const lbl = n?.querySelector("label, legend, [class*='label']");
+      const lbl = n !== el && n.querySelector("label, legend, [class*='label']");
       if (lbl && lbl.textContent.trim()) return lbl.textContent;
+      // Question text often lives in a plain <p>/<div> right before the
+      // field's container ("Please enter your full name" style forms) —
+      // no label element anywhere.
+      const prev = n.previousElementSibling;
+      if (prev && !prev.querySelector("input, textarea, select, button")
+          && prev.textContent.trim()
+          && prev.textContent.trim().length <= 160) {
+        return prev.textContent;
+      }
+      n = n.parentElement;
     }
     return el.name || el.placeholder || "";
   };
@@ -180,7 +197,64 @@
     return res;
   }
 
-  function fillAll(pending) {
+  // Custom dropdowns (react-select and kin — modern Greenhouse boards
+  // render EEO questions this way): open the listbox with real mouse
+  // events, pick the option, then VERIFY by reading the displayed value
+  // back ([class*=single-value]; the inner input never mirrors it).
+  // Unverified selections are not counted.
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const mouse = (el, type) => el.dispatchEvent(
+    new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+
+  async function fillEEOCombos(eeo, doneCats) {
+    const res = { count: 0, cats: new Set() };
+    if (!eeo || !eeo.length) return res;
+    const combos = [...document.querySelectorAll(
+      "[role='combobox'], button[aria-haspopup='listbox']")]
+      .filter((el) => el.offsetParent !== null && !el.closest(".iti"));
+    for (const el of combos) {
+      const cat = EEO_ORDER.find((c) => EEO_LABELS[c].test(norm(labelFor(el))));
+      if (!cat || doneCats.has(cat) || res.cats.has(cat)) continue;
+      const entry = eeo.find((e) => e.cat === cat);
+      if (!entry) continue;
+      const holder = el.closest("[class*='select'],[class*='combobox']")
+        || el.parentElement;
+      const shownNow = holder?.querySelector("[class*='single-value']")?.textContent
+        || el.value || "";
+      if (shownNow.trim()) continue;   // already answered — never overwrite
+
+      mouse(el, "mousedown"); mouse(el, "mouseup");
+      if (typeof el.click === "function") el.click();
+      await sleep(250);
+      // Greenhouse pages carry ~230 hidden intl-tel-input options; visible
+      // + non-.iti filtering is load-bearing here.
+      const opts = [...document.querySelectorAll("[role='option']")]
+        .filter((o) => o.offsetParent !== null && !o.closest(".iti"));
+      const i = opts.length
+        ? pickEEOOption(cat, entry.value, opts.map((o) => norm(o.textContent)), eeo)
+        : -1;
+      if (i < 0) {   // nothing safe to pick — close and move on
+        el.dispatchEvent(new KeyboardEvent("keydown",
+          { key: "Escape", bubbles: true }));
+        mouse(document.body, "mousedown");
+        continue;
+      }
+      mouse(opts[i], "mousedown"); mouse(opts[i], "mouseup");
+      if (typeof opts[i].click === "function") opts[i].click();
+      await sleep(250);
+      const display = holder?.querySelector("[class*='single-value']")?.textContent
+        || el.value || (el.tagName === "BUTTON" ? el.textContent : "") || "";
+      // Verify: would our own picker have chosen what's now displayed?
+      if (norm(display)
+          && pickEEOOption(cat, entry.value, [norm(display)], eeo) === 0) {
+        res.count++;
+        res.cats.add(cat);
+      }
+    }
+    return res;
+  }
+
+  async function fillAll(pending) {
     let count = 0;
     const filledKeys = new Set();
     const values = [...(pending.values || [])];
@@ -233,8 +307,10 @@
       }
     }
     const eeoRes = fillEEO(pending.eeo);
-    count += eeoRes.count;
+    const comboRes = await fillEEOCombos(pending.eeo, eeoRes.cats);
+    count += eeoRes.count + comboRes.count;
     for (const c of eeoRes.cats) filledKeys.add("eeo " + c);
+    for (const c of comboRes.cats) filledKeys.add("eeo " + c);
     return { count, filledKeys };
   }
 
@@ -247,7 +323,7 @@
       try {
         const { pending } = await chrome.storage.local.get("pending");
         if (!pending) return;
-        const { count } = fillAll(pending);
+        const { count } = await fillAll(pending);
         window.top.postMessage({ type: "JOB_ENGINE_FILL_RESULT", count }, "*");
       } catch { /* extension context gone — nothing to do */ }
     });
@@ -338,8 +414,9 @@
     const status = document.createElement("div");
     status.style.cssText = `color:${P.muted};margin-bottom:8px`;
 
-    fillBtn.onclick = () => {
-      const { count, filledKeys } = fillAll(pending);
+    fillBtn.onclick = async () => {
+      status.textContent = "Filling…";
+      const { count, filledKeys } = await fillAll(pending);
       let frameCount = 0;
       const render = () => {
         const total = count + frameCount;
@@ -358,7 +435,9 @@
         try { f.contentWindow.postMessage({ type: "JOB_ENGINE_FILL" }, "*"); }
         catch { /* cross-origin contentWindow access — ignore */ }
       }
-      setTimeout(() => window.removeEventListener("message", collect), 3000);
+      // Combobox driving is slow by design (open, settle, pick, verify) —
+      // give embedded frames time to finish reporting.
+      setTimeout(() => window.removeEventListener("message", collect), 10000);
       render();
       for (const r of rowRegistry) {
         if (filledKeys.has(r.key) && !r.name.textContent.startsWith("✓")) {

@@ -12,9 +12,20 @@ window.addEventListener("message", (ev) => {
     return;
   }
   if (ev.data?.type !== "JOB_ENGINE_AUTOFILL") return;
-  chrome.runtime.sendMessage({ kind: "store", payload: ev.data.payload }, () => {
-    window.postMessage({ type: "JOB_ENGINE_AUTOFILL_ACK" }, "*");
-  });
+  // After the extension is reloaded/updated, content scripts in tabs that
+  // were already open are orphaned — sendMessage throws. Tell the page
+  // loudly instead of dropping the payload on the floor.
+  try {
+    chrome.runtime.sendMessage({ kind: "store", payload: ev.data.payload }, () => {
+      if (chrome.runtime.lastError) {
+        window.postMessage({ type: "JOB_ENGINE_EXTENSION_STALE" }, "*");
+        return;
+      }
+      window.postMessage({ type: "JOB_ENGINE_AUTOFILL_ACK" }, "*");
+    });
+  } catch {
+    window.postMessage({ type: "JOB_ENGINE_EXTENSION_STALE" }, "*");
+  }
 });
 
 window.postMessage({ type: "JOB_ENGINE_EXTENSION_PRESENT", version: VERSION }, "*");
