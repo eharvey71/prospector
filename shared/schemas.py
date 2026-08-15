@@ -41,7 +41,10 @@ ENGINE_TRANSITIONS: dict[AppState, set[AppState]] = {
     AppState.DRAFTED: {AppState.IN_REVIEW},
     AppState.APPROVED: {AppState.QUEUED},
     AppState.QUEUED: {AppState.SUBMITTING},
-    AppState.SUBMITTING: {AppState.SUBMITTED, AppState.FAILED, AppState.NEEDS_HUMAN},
+    # QUEUED here is the retry rollback: the worker returns a retryable
+    # failure and re-arms the idempotency gate for the redelivered task.
+    AppState.SUBMITTING: {AppState.SUBMITTED, AppState.FAILED,
+                          AppState.NEEDS_HUMAN, AppState.QUEUED},
 }
 
 

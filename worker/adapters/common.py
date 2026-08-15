@@ -22,10 +22,11 @@ log = logging.getLogger("adapter.common")
 DRY_RUN = os.environ.get("SUBMIT_DRY_RUN", "true").lower() == "true"
 BUCKET = os.environ.get("STORAGE_BUCKET", "")
 
-US_LOCATION_HINTS = (
-    "united states", "usa", ", va", ", ca", ", ny", ", tx", ", wa", ", ma",
-    ", pa", ", il", ", ga", ", nc", ", fl", ", oh", ", co", ", or", ", md",
-)
+# Word-bounded on purpose: a bare ", ca" substring would classify
+# "Toronto, Canada" as California (and ", co" would claim Colombia).
+US_LOCATION_RX = re.compile(
+    r"\bunited states\b|\busa\b"
+    r"|,\s*(va|ca|ny|tx|wa|ma|pa|il|ga|nc|fl|oh|co|or|md)\b", re.I)
 US_CITIZEN_HINTS = ("us citizen", "u.s. citizen", "citizen", "green card",
                     "permanent resident", "authorized to work")
 
@@ -60,7 +61,7 @@ def decide_standard_answer(label: str, location: str, work_auth: str,
     loc = location.lower()
     auth = work_auth.lower()
     s = screeners or {}
-    in_us = any(h in loc for h in US_LOCATION_HINTS)
+    in_us = bool(US_LOCATION_RX.search(loc))
     us_authorized = any(h in auth for h in US_CITIZEN_HINTS)
 
     def yes_no(fact):
@@ -231,20 +232,25 @@ async def unmark_submit_clicked(uid: str, app_id: str) -> None:
                       uid, app_id)
 
 
-async def mark_submit_clicked(uid: str, app_id: str) -> None:
+async def mark_submit_clicked(uid: str, app_id: str) -> bool:
     """Record — BEFORE clicking a real Submit button — that this application
     has been filed. If the worker then crashes or times out, the retried
     delivery sees this marker and escalates instead of submitting again.
-    Best-effort by necessity, but the click is the point of no return, so
-    this write happens first."""
+
+    Returns False when the write fails, and the adapter must then NOT
+    click: an unrecorded click is exactly the double-submission hole the
+    marker exists to close. Not clicking is always safe — the attempt
+    becomes a retryable failure."""
     try:
         from google.cloud import firestore
         (firestore.Client().collection("users").document(uid)
          .collection("applications").document(app_id)
          .update({"submission.submitClickedAt": datetime.now(timezone.utc)}))
+        return True
     except Exception:
         log.exception("could not record submit-click marker uid=%s app=%s",
                       uid, app_id)
+        return False
 
 
 async def take_screenshot(page, uid: str, app_id: str, label: str) -> str:

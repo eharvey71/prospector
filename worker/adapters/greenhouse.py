@@ -149,8 +149,16 @@ class GreenhouseAdapter(SubmissionAdapter):
                                "Submit button — finish it by hand",
                     )
                 # Point of no return: record the click BEFORE making it, then
-                # undo the record if the click provably didn't happen.
-                await mark_submit_clicked(uid, app_id)
+                # undo the record if the click provably didn't happen. If the
+                # record itself fails, do NOT click — an unrecorded click
+                # could be filed twice. Retrying an unclicked form is safe.
+                if not await mark_submit_clicked(uid, app_id):
+                    return SubmissionOutcome(
+                        success=False, tier=self.tier,
+                        screenshots=shots, fill_sheet=sheet,
+                        reason="could not record the submit-click safety "
+                               "marker; Submit was not clicked — retrying",
+                    )
                 try:
                     await submit_btn.click()
                 except Exception:

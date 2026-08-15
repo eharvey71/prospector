@@ -97,6 +97,55 @@ def crawl_boards(event: scheduler_fn.ScheduledEvent) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Sweeper: applications stuck in SUBMITTING
+# ---------------------------------------------------------------------------
+
+@scheduler_fn.on_schedule(schedule="every 30 minutes", timeout_sec=120)
+def sweep_stuck_submissions(event: scheduler_fn.ScheduledEvent) -> None:
+    """Escalate applications abandoned mid-submission.
+
+    If the worker container dies (OOM, timeout, redeploy) after QUEUED ->
+    SUBMITTING, the redelivered Cloud Task hits the idempotency gate, gets
+    acked as a duplicate, and the application would sit in SUBMITTING
+    forever with nothing left to touch it. Anything in SUBMITTING for 30+
+    minutes is dead — a live attempt finishes in a few minutes. Always
+    escalates, never retries: the submitClickedAt marker says whether the
+    Submit click happened, and when it has, resubmitting is forbidden."""
+    from datetime import datetime, timedelta, timezone
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    db = _db()
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+    stuck = (db.collection_group("applications")
+             .where(filter=FieldFilter("state", "==", AppState.SUBMITTING.value))
+             .where(filter=FieldFilter("updatedAt", "<", cutoff))
+             .limit(50).stream())
+    swept = 0
+    for snap in stuck:
+        uid = snap.reference.parent.parent.id
+        data = snap.to_dict() or {}
+        clicked = (data.get("submission") or {}).get("submitClickedAt")
+        if clicked:
+            reason = (f"submission attempt died after clicking Submit "
+                      f"({clicked}) — check your email; do not reapply "
+                      f"unless you're sure it never went through")
+        else:
+            reason = ("submission attempt died before clicking Submit — "
+                      "the form was never filed; approve again to retry")
+        try:
+            if advance(db, uid, snap.id, AppState.SUBMITTING,
+                       AppState.NEEDS_HUMAN, note=f"sweeper: {reason}",
+                       extra_fields={"submission.error": reason}):
+                swept += 1
+                log.warning("swept stuck submission uid=%s app=%s clicked=%s",
+                            uid, snap.id, bool(clicked))
+        except Exception as exc:  # keep sweeping the rest
+            _health_error("sweep", exc)
+    if swept:
+        log.info("sweeper escalated %d stuck submission(s)", swept)
+
+
+# ---------------------------------------------------------------------------
 # Matching (posting written -> score for every user)
 # ---------------------------------------------------------------------------
 

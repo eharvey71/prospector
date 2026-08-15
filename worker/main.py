@@ -160,15 +160,15 @@ def _fail(task: SubmitTask, attempts: int, reason: str) -> None:
 
 
 def _requeue(task: SubmitTask, attempts: int, reason: str) -> None:
-    """Roll SUBMITTING back to QUEUED so the retried delivery passes the gate."""
+    """Roll SUBMITTING back to QUEUED so the retried delivery passes the gate.
+
+    Goes through advance() like every other transition: if the app is no
+    longer in SUBMITTING (a sweeper escalated it, a human intervened), the
+    rollback no-ops instead of clobbering their write."""
     assert db is not None
-    ref = (
-        db.collection("users").document(task.uid)
-        .collection("applications").document(task.app_id)
-    )
-    ref.update({
-        "state": AppState.QUEUED.value,
-        "submission.attempts": attempts,
-        "submission.error": reason,
-        "updatedAt": datetime.now(timezone.utc),
-    })
+    if not advance(db, task.uid, task.app_id, AppState.SUBMITTING, AppState.QUEUED,
+                   note=f"retry {attempts}: {reason}",
+                   extra_fields={"submission.attempts": attempts,
+                                 "submission.error": reason}):
+        log.info("app %s left SUBMITTING before requeue; not rolling back",
+                 task.app_id)
