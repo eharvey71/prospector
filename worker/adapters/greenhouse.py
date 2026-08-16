@@ -75,10 +75,18 @@ class GreenhouseAdapter(SubmissionAdapter):
                     await page.wait_for_load_state("domcontentloaded")
 
                 if await page.locator("#first_name").count() == 0:
-                    return SubmissionOutcome(
-                        success=False, tier=self.tier, escalate=True,
-                        reason="no recognizable Greenhouse form on page",
-                    )
+                    # Modern React board or an embedded frame — not the
+                    # legacy markup this adapter drives. Tier 2 discovers
+                    # any form shape (and looks inside iframes), so
+                    # delegate instead of bouncing the job to a human.
+                    log.info("no legacy Greenhouse form at %s — trying tier 2",
+                             job_url)
+                    await browser.close()
+                    from .agentic import AgenticAdapter
+                    return await AgenticAdapter().submit(
+                        job_url=job_url, profile=profile,
+                        application=application, posting=posting,
+                        uid=uid, app_id=app_id)
 
                 # --- core fields ---
                 first, _, last = name.partition(" ")

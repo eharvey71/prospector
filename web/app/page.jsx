@@ -340,7 +340,7 @@ export default function ReviewQueue() {
       (snap) => setInflight(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
       onErr("In flight"));
     const unsub5 = onSnapshot(
-      query(base, where("state", "in", ["submitted", "failed"]),
+      query(base, where("state", "in", ["submitted", "failed", "rejected"]),
             orderBy("updatedAt", "desc"), limit(25)),
       (snap) => setDone(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
       onErr("Done"));
@@ -575,7 +575,7 @@ export default function ReviewQueue() {
     { key: "inflight", label: "In flight", count: inflight.length,
       blurb: "Approved applications the engine is submitting right now." },
     { key: "done", label: "Done", count: done.length,
-      blurb: "Finished — submitted or failed. Most recent first." },
+      blurb: "Submitted, failed, or skipped by you. Skips can be brought back." },
   ];
   const activeTab = TABS.find((t) => t.key === tab) || TABS[0];
 
@@ -669,6 +669,12 @@ export default function ReviewQueue() {
             <Row key={a.id} a={a}>
               <MatchInsight app={a} threshold={threshold} queue="review" />
               <div style={{ marginTop: 6 }}><ResumeLink path={a.resume_path} /></div>
+              {!a.letter?.text && (
+                <p className="hint" style={{ marginTop: 8 }}>
+                  No letter — this application will be submitted without one.
+                  Type below only if you want to add one.
+                </p>
+              )}
               <textarea className="letter" defaultValue={a.letter?.text || ""}
                         onBlur={(e) => saveLetter(a.id, e.target.value)} />
               <div className="actions">
@@ -748,6 +754,11 @@ export default function ReviewQueue() {
                     : "Write the letter"}
                 </button>
                 <button className="btn"
+                        onClick={() => transition(a.id, "in_review",
+                          "no letter — sent straight to review")}>
+                  Apply without letter
+                </button>
+                <button className="btn"
                         onClick={() => transition(a.id, "rejected", "skipped from matches")}>
                   Skip
                 </button>
@@ -782,9 +793,18 @@ export default function ReviewQueue() {
                  right={
                    a.state === "submitted"
                      ? <span className="pill ok">✓ submitted</span>
-                     : <span className="pill danger">✗ failed</span>
+                     : a.state === "rejected"
+                       ? <span className="pill">skipped</span>
+                       : <span className="pill danger">✗ failed</span>
                  }>
-              {a.state === "submitted" ? (
+              {a.state === "rejected" ? (
+                <div className="actions" style={{ marginTop: 10 }}>
+                  <button className="btn" onClick={() =>
+                    transition(a.id, "matched", "un-skipped from Done")}>
+                    Put it back in Matches
+                  </button>
+                </div>
+              ) : a.state === "submitted" ? (
                 <p className="hint" style={{ marginTop: 10 }}>
                   Submitted{a.submission?.confirmedAt ? ` — ${new Date(
                     a.submission.confirmedAt.seconds

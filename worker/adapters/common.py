@@ -114,6 +114,12 @@ async def fetch_resume(uid: str, display_name: str,
 
 
 SUBMIT_TEXT = re.compile(r"\bsubmit\b|\bsend application\b|\bapply\b", re.I)
+# For buttons WITHOUT type=submit (React forms wire plain buttons with JS
+# handlers): the whole label must be a submit phrase, not merely contain
+# one — "Apply now" yes, "Apply filters" or "Search jobs" never.
+PLAIN_SUBMIT_RX = re.compile(
+    r"^\s*(submit(\s+(application|now))?|apply(\s+(now|for this job))?"
+    r"|send(\s+(application|my application))?)\s*$", re.I)
 
 # ---------------------------------------------------------------------------
 # Post-submit confirmation: deterministic checks, then an LLM judge.
@@ -158,11 +164,18 @@ async def confirm_submission(page, *, title: str = "", company: str = ""
     code that did the work doesn't get to grade it. Any judge failure or
     hesitation degrades to 'unclear' (escalate), never to success or retry.
     """
-    try:
-        body = await page.evaluate(
-            "() => document.body ? document.body.innerText : ''") or ""
-    except Exception:
-        body = ""
+    # Text from EVERY frame: on embedded boards the confirmation renders
+    # inside the same iframe the form lived in, not the top document.
+    texts = []
+    for fr in getattr(page, "frames", None) or [page]:
+        try:
+            t = await fr.evaluate(
+                "() => document.body ? document.body.innerText : ''")
+            if t:
+                texts.append(t)
+        except Exception:
+            pass
+    body = "\n".join(texts)
     if CONFIRM_URL_RX.search(page.url or ""):
         return "submitted", f"confirmation URL ({page.url})"
     if CONFIRM_RX.search(body):
@@ -211,6 +224,16 @@ async def find_submit_button(page, preferred: list[str]):
             label = ((await b.text_content()) or "") + " " \
                 + ((await b.get_attribute("value")) or "")
             if SUBMIT_TEXT.search(label):
+                return b
+    # Plain buttons wired with JS handlers (React forms often skip
+    # type=submit entirely): accept only an exact submit-phrase label.
+    for sel in ("button", "[role='button']"):
+        loc = page.locator(sel)
+        for i in range(min(await loc.count(), 40)):
+            b = loc.nth(i)
+            if not await b.is_visible():
+                continue
+            if PLAIN_SUBMIT_RX.match(((await b.text_content()) or "").strip()):
                 return b
     for sel in ("button[type='submit']", "input[type='submit']"):
         loc = page.locator(sel).first

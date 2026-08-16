@@ -17,6 +17,7 @@ The escalation contract is unchanged from Tier 1, enforced structurally:
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -148,6 +149,34 @@ CAPTCHA_SELECTOR = (
     "iframe[src*='hcaptcha'], iframe[src*='turnstile'], [class*='captcha']"
 )
 
+FORM_COUNT_JS = ("() => document.querySelectorAll("
+                 "'input:not([type=hidden]), textarea, select').length")
+
+
+async def _wait_for_form(page, timeout_s: int = 15):
+    """The frame that actually holds the application form, or None.
+
+    Two failure modes this covers, straight from production escalations:
+    SPA boards render the form well after domcontentloaded (so waiting
+    matters), and embedded boards (Greenhouse-in-an-iframe on a company
+    site, BambooHR) put the form in a child frame the top document never
+    sees (so looking in every frame matters). Returns the frame with the
+    most form controls once one looks like a real form."""
+    best, best_n = None, 0
+    for _ in range(timeout_s):
+        best, best_n = None, 0
+        for fr in page.frames:
+            try:
+                n = await fr.evaluate(FORM_COUNT_JS)
+            except Exception:
+                continue  # frame navigating/cross-origin-restricted — skip
+            if n > best_n:
+                best, best_n = fr, n
+        if best_n >= 3:   # unambiguous form
+            return best
+        await asyncio.sleep(1)
+    return best if best_n >= 1 else None
+
 
 class AgenticAdapter(SubmissionAdapter):
     tier = 2
@@ -164,19 +193,31 @@ class AgenticAdapter(SubmissionAdapter):
             page = await browser.new_page()
             try:
                 await page.goto(job_url, wait_until="domcontentloaded", timeout=45_000)
-                # One hop through an Apply link if the landing page has no form.
-                if await page.locator("form input, form textarea").count() == 0:
+                # Wait for the form to render, wherever it renders (SPA
+                # boards paint late; embedded boards live in an iframe).
+                form = await _wait_for_form(page)
+                # One hop through an Apply link if no form appeared.
+                if form is None:
                     apply_btn = page.locator(
                         "a:has-text('Apply'), button:has-text('Apply')").first
-                    if await apply_btn.count() > 0:
+                    if await apply_btn.count() > 0 and await apply_btn.is_visible():
                         await apply_btn.click()
                         await page.wait_for_load_state("domcontentloaded")
+                        form = await _wait_for_form(page)
+                if form is None:
+                    shots.append(await take_screenshot(page, uid, app_id, "no_form"))
+                    return SubmissionOutcome(
+                        success=False, tier=self.tier, escalate=True,
+                        screenshots=shots,
+                        reason="no form controls found — waited 15s and "
+                               "checked every frame on the page",
+                    )
 
-                inventory = await page.evaluate(INVENTORY_JS)
+                inventory = await form.evaluate(INVENTORY_JS)
                 if not inventory:
                     return SubmissionOutcome(
                         success=False, tier=self.tier, escalate=True,
-                        reason="no form controls found on page",
+                        reason="no fillable controls in the form frame",
                     )
                 if len(inventory) > MAX_FIELDS:
                     return SubmissionOutcome(
@@ -191,7 +232,9 @@ class AgenticAdapter(SubmissionAdapter):
                         c["kind"] = "cover_letter"
 
                 plan = self._plan(inventory, profile, application, letter)
-                filled, failed = await self._execute(page, inventory, plan, letter)
+                # _execute drives locators only, so the form FRAME stands in
+                # for the page — fills land inside embedded boards too.
+                filled, failed = await self._execute(form, inventory, plan, letter)
 
                 # Resume: attach to any file input whose label says resume/cv.
                 resume_path = await fetch_resume(uid, name, application.get("resume_path"))
@@ -199,7 +242,7 @@ class AgenticAdapter(SubmissionAdapter):
                     if c["kind"] == "file" and re.search(
                             r"resume|\bcv\b", c["label"], re.I):
                         if resume_path:
-                            await page.locator(
+                            await form.locator(
                                 f"[data-je-id='{c['id']}']").set_input_files(resume_path)
                             filled.append((c["id"], os.path.basename(resume_path)))
                         elif c["required"]:
@@ -216,7 +259,8 @@ class AgenticAdapter(SubmissionAdapter):
                     for c in inventory
                     if c["required"] and c["id"] not in filled_ids
                 ]
-                captcha = await page.locator(CAPTCHA_SELECTOR).count() > 0
+                captcha = (await page.locator(CAPTCHA_SELECTOR).count() > 0
+                           or await form.locator(CAPTCHA_SELECTOR).count() > 0)
                 if captcha:
                     blockers.append("captcha on page")
 
@@ -248,7 +292,11 @@ class AgenticAdapter(SubmissionAdapter):
                                "(set SUBMIT_DRY_RUN=false to go live)",
                     )
 
-                submit_btn = await find_submit_button(page, [])
+                # The Submit button lives in the same frame as the form;
+                # fall back to the top page in case it sits outside.
+                submit_btn = await find_submit_button(form, [])
+                if submit_btn is None:
+                    submit_btn = await find_submit_button(page, [])
                 if submit_btn is None:
                     shots.append(await take_screenshot(page, uid, app_id, "no_submit_button"))
                     return SubmissionOutcome(

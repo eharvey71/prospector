@@ -62,6 +62,10 @@ service cloud.firestore {
           // the human-owned transitions.
           return (before == after)
             || (before == 'matched' && after == 'rejected')
+            // Apply without a letter: skip drafting, go straight to review.
+            || (before == 'matched' && after == 'in_review')
+            // Un-skip: bring a rejected job back into the pipeline.
+            || (before == 'rejected' && after == 'matched')
             || (before == 'in_review' && after in ['approved', 'rejected'])
             || (before == 'needs_human' && after in ['submitted', 'rejected'])
             // Human-owned retries out of failed: back to matched re-drafts
