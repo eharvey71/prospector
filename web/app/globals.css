@@ -214,3 +214,19 @@ details.panel.tint-amber  { border-color: rgba(224, 179, 76, .45); }
 .orline::before, .orline::after {
   content: ""; flex: 1; border-top: 1px solid var(--border);
 }
+
+/* --- shared wait indicator (Busy component / .spinner in buttons) ------- */
+/* currentColor so it stays visible on any background: accent in .busy,
+   dark-on-accent inside .btn-primary, muted inside row meta text. */
+.spinner {
+  width: 15px; height: 15px; flex: none; display: inline-block;
+  border-radius: 50%; box-sizing: border-box; vertical-align: -2px;
+  border: 2.5px solid currentColor; border-top-color: transparent;
+  animation: je-spin .8s linear infinite;
+}
+.spinner.sm { width: 12px; height: 12px; border-width: 2px; margin-right: 7px; }
+.busy {
+  display: inline-flex; align-items: center; gap: 10px;
+  color: var(--accent); font-size: 15px; font-weight: 600; margin: 10px 0;
+}
+@keyframes je-spin { to { transform: rotate(360deg); } }

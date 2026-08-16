@@ -10,11 +10,12 @@ import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { auth, db, functions, googleProvider } from "../../lib/firebase";
-import { T, Nav, box, btn, btnPrimary, input, label } from "../ui";
+import { Busy, T, Nav, box, btn, btnPrimary, input, label } from "../ui";
 
 export default function SettingsPage() {
   const [user, setUser] = useState(null);
   const [status, setStatus] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const [titles, setTitles] = useState("");           // comma-separated
   const [titleSynonyms, setTitleSynonyms] = useState(""); // auto-generated, editable
@@ -74,7 +75,20 @@ export default function SettingsPage() {
   const csv = (s) => s.split(",").map(x => x.trim()).filter(Boolean);
 
   async function save() {
-    setStatus("Saving…");
+    setSaving(true);
+    setStatus("");
+    try {
+      await doSave();
+      setStatus("Saved ✓");
+      setTimeout(() => setStatus(""), 2500);
+    } catch (e) {
+      setStatus(`Save failed: ${e.message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function doSave() {
     await setDoc(doc(db, "users", user.uid), {
       preferences: {
         titles: csv(titles),
@@ -98,8 +112,6 @@ export default function SettingsPage() {
       workable: csv(workableBoards),
       linkedin: csv(linkedinSearches),
     });
-    setStatus("Saved ✓");
-    setTimeout(() => setStatus(""), 2500);
   }
 
   async function trackCompany(nameArg) {
@@ -220,7 +232,9 @@ export default function SettingsPage() {
             onChange={e => setSuggestRole(e.target.value)} />
           <div className="actions">
             <button className="btn-primary" disabled={suggesting} onClick={findCompanies}>
-              {suggesting ? "Searching… (can take a minute)" : "Suggest companies"}
+              {suggesting
+                ? <><span className="spinner sm" />Searching — can take a minute</>
+                : "Suggest companies"}
             </button>
           </div>
           {suggestions.map(s => (
@@ -253,7 +267,7 @@ export default function SettingsPage() {
                   <strong style={{ flex: 1 }}>{name}</strong>
                   <button className="btn" disabled={tracking}
                           onClick={() => trackCompany(name)}>
-                    {tracking ? "…" : "Track"}
+                    {tracking ? <span className="spinner sm" /> : "Track"}
                   </button>
                 </div>
               ))}
@@ -267,7 +281,9 @@ export default function SettingsPage() {
                    onChange={e => setTrackName(e.target.value)}
                    onKeyDown={e => e.key === "Enter" && trackCompany()} />
             <button className="btn-primary" disabled={tracking} onClick={() => trackCompany()}>
-              {tracking ? "Resolving…" : "Track"}
+              {tracking
+                ? <><span className="spinner sm" />Resolving…</>
+                : "Track"}
             </button>
           </div>
           {trackResults.map((r, i) => {
@@ -380,10 +396,13 @@ export default function SettingsPage() {
       </details>
 
       <div className="savebar">
-        <button onClick={save} style={{ ...btnPrimary, padding: "10px 24px", fontSize: 16 }}>
+        <button onClick={save} disabled={saving}
+                style={{ ...btnPrimary, padding: "10px 24px", fontSize: 16 }}>
           Save settings
         </button>
-        <span style={{ marginLeft: 12 }}>{status}</span>
+        <span style={{ marginLeft: 12 }}>
+          {saving ? <Busy label="Saving…" /> : status}
+        </span>
       </div>
     </main>
   );

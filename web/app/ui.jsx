@@ -35,6 +35,17 @@ export const input = {
 };
 export const label = { fontSize: 13, fontWeight: 600, color: T.muted };
 
+// THE wait indicator. Anywhere the user waits on the engine, render this
+// (or put <span className="spinner sm" /> inside a button) — one look for
+// "working on it" across the whole app.
+export function Busy({ label }) {
+  return (
+    <span className="busy" role="status">
+      <span className="spinner" />{label}
+    </span>
+  );
+}
+
 const PAGES = [
   { href: "/", title: "Queue" },
   { href: "/profile", title: "Profile" },

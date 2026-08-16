@@ -11,7 +11,7 @@ import {
 import { httpsCallable } from "firebase/functions";
 import { ref as storageRef, getDownloadURL } from "firebase/storage";
 import { auth, db, functions, googleProvider, storage } from "../lib/firebase";
-import { Nav } from "./ui";
+import { Busy, Nav } from "./ui";
 
 const ANSWER_LABELS = {
   why_company: "Why this company",
@@ -285,6 +285,7 @@ export default function ReviewQueue() {
   const [escalated, setEscalated] = useState([]);
   const [jobUrl, setJobUrl] = useState("");
   const [addStatus, setAddStatus] = useState("");
+  const [addBusy, setAddBusy] = useState(false);
   const [matches, setMatches] = useState([]);
   const [inflight, setInflight] = useState([]);
   const [done, setDone] = useState([]);
@@ -379,7 +380,8 @@ export default function ReviewQueue() {
     // only a real string counts as a URL override.
     const url = (typeof urlArg === "string" ? urlArg : jobUrl).trim();
     if (!url) return;
-    setAddStatus("Reading the posting… (up to a minute)");
+    setAddBusy(true);
+    setAddStatus("");
     try {
       const call = httpsCallable(functions, "add_job_url", { timeout: 300_000 });
       const res = await call({ url });
@@ -392,6 +394,8 @@ export default function ReviewQueue() {
       setJobUrl("");
     } catch (e) {
       setAddStatus(`Couldn't add it: ${e.message}`);
+    } finally {
+      setAddBusy(false);
     }
   }
 
@@ -634,7 +638,9 @@ export default function ReviewQueue() {
         />
         <button className="btn-primary" onClick={() => addJob()}>Add job</button>
       </div>
-      {addStatus && <p className="hint" style={{ marginBottom: 10 }}>{addStatus}</p>}
+      {addBusy && <Busy label="Reading the posting — this can take up to a minute" />}
+      {!addBusy && addStatus &&
+        <p className="hint" style={{ marginBottom: 10 }}>{addStatus}</p>}
       {funnel && (
         <p className="funnel"
            title="Where crawled jobs went: seen = evaluated for you; filtered = didn't resemble your titles/skills; scored = rated; matched = cleared your bar">
@@ -737,7 +743,9 @@ export default function ReviewQueue() {
               <div className="actions">
                 <button className="btn-primary" disabled={draftingIds.includes(a.id)}
                         onClick={() => writeLetter(a.id)}>
-                  {draftingIds.includes(a.id) ? "Writing… (about a minute)" : "Write the letter"}
+                  {draftingIds.includes(a.id)
+                    ? <><span className="spinner sm" />Writing — about a minute</>
+                    : "Write the letter"}
                 </button>
                 <button className="btn"
                         onClick={() => transition(a.id, "rejected", "skipped from matches")}>
@@ -758,7 +766,8 @@ export default function ReviewQueue() {
                    <span className="pill accent">
                      {a.state === "approved" && "waiting to queue"}
                      {a.state === "queued" && "queued"}
-                     {a.state === "submitting" && "submitting…"}
+                     {a.state === "submitting" &&
+                       <><span className="spinner sm" />submitting…</>}
                    </span>
                  } />
           ))}

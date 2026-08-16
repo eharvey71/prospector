@@ -12,7 +12,7 @@ import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
 import { deleteDoc, doc, getDoc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
 import { ref, uploadBytes, getMetadata } from "firebase/storage";
 import { auth, db, googleProvider, storage } from "../../lib/firebase";
-import { T, Nav, box, btn, btnPrimary, input, label } from "../ui";
+import { Busy, T, Nav, box, btn, btnPrimary, input, label } from "../ui";
 
 const EMPTY_ROLE = { company: "", title: "", start: "", end: "", bullets: [""] };
 const EMPTY_SAMPLE = { title: "", text: "" };
@@ -22,6 +22,7 @@ const EMPTY_PROJECT = { name: "", description: "", tech: "" }; // tech: csv in U
 export default function ProfilePage() {
   const [user, setUser] = useState(null);
   const [status, setStatus] = useState("");
+  const [busyLabel, setBusyLabel] = useState("");   // non-empty = spinner on
   const [resumeInfo, setResumeInfo] = useState(null);
   const [extraction, setExtraction] = useState(null);
 
@@ -111,7 +112,8 @@ export default function ProfilePage() {
   const csv = (s) => s.split(",").map(x => x.trim()).filter(Boolean);
 
   async function save() {
-    setStatus("Saving…");
+    setBusyLabel("Saving…");
+    setStatus("");
     const profile = {
       name,
       email,
@@ -151,9 +153,15 @@ export default function ProfilePage() {
       },
       updatedAt: serverTimestamp(),
     };
-    await setDoc(doc(db, "users", user.uid), profile, { merge: true });
-    setStatus("Saved ✓");
-    setTimeout(() => setStatus(""), 2500);
+    try {
+      await setDoc(doc(db, "users", user.uid), profile, { merge: true });
+      setStatus("Saved ✓");
+      setTimeout(() => setStatus(""), 2500);
+    } catch (e) {
+      setStatus(`Save failed: ${e.message}`);
+    } finally {
+      setBusyLabel("");
+    }
   }
 
   async function uploadResume(file) {
@@ -162,13 +170,20 @@ export default function ProfilePage() {
       setStatus("Resume must be a PDF");
       return;
     }
-    setStatus("Uploading resume…");
-    await uploadBytes(ref(storage, `users/${user.uid}/resume.pdf`), file, {
-      contentType: "application/pdf",
-    });
-    setResumeInfo(`resume.pdf uploaded ${new Date().toLocaleString()}`);
-    setStatus("Resume uploaded ✓");
-    setTimeout(() => setStatus(""), 2500);
+    setBusyLabel("Uploading resume…");
+    setStatus("");
+    try {
+      await uploadBytes(ref(storage, `users/${user.uid}/resume.pdf`), file, {
+        contentType: "application/pdf",
+      });
+      setResumeInfo(`resume.pdf uploaded ${new Date().toLocaleString()}`);
+      setStatus("Resume uploaded ✓");
+      setTimeout(() => setStatus(""), 2500);
+    } catch (e) {
+      setStatus(`Upload failed: ${e.message}`);
+    } finally {
+      setBusyLabel("");
+    }
   }
 
   async function applyExtraction() {
@@ -502,10 +517,13 @@ export default function ProfilePage() {
       </details>
 
       <div className="savebar">
-        <button onClick={save} style={{ ...btnPrimary, padding: "10px 24px", fontSize: 16 }}>
+        <button onClick={save} disabled={!!busyLabel}
+                style={{ ...btnPrimary, padding: "10px 24px", fontSize: 16 }}>
           Save profile
         </button>
-        <span style={{ marginLeft: 12 }}>{status}</span>
+        <span style={{ marginLeft: 12 }}>
+          {busyLabel ? <Busy label={busyLabel} /> : status}
+        </span>
       </div>
     </main>
   );
