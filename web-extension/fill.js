@@ -215,6 +215,9 @@
     for (const el of combos) {
       const cat = EEO_ORDER.find((c) => EEO_LABELS[c].test(norm(labelFor(el))));
       if (!cat || doneCats.has(cat) || res.cats.has(cat)) continue;
+      // Disabled until an earlier answer enables it (race waits on the
+      // Hispanic/Latino answer) — leave for a later round.
+      if (el.disabled || el.getAttribute("aria-disabled") === "true") continue;
       const entry = eeo.find((e) => e.cat === cat);
       if (!entry) continue;
       const holder = el.closest("[class*='select'],[class*='combobox']")
@@ -225,7 +228,7 @@
 
       mouse(el, "mousedown"); mouse(el, "mouseup");
       if (typeof el.click === "function") el.click();
-      await sleep(250);
+      await sleep(400);   // listbox options can render lazily
       // Greenhouse pages carry ~230 hidden intl-tel-input options; visible
       // + non-.iti filtering is load-bearing here.
       const opts = [...document.querySelectorAll("[role='option']")]
@@ -307,18 +310,21 @@
       }
     }
     // EEO questions reveal conditionally (answering Hispanic/Latino "No"
-    // makes the race question appear) — so fill in ROUNDS, re-scanning
-    // the page until a round finds nothing new to fill.
+    // makes the race question appear, sometimes after a delay) — so fill
+    // in ROUNDS: re-scan, fill what's new, wait for reveals to render.
+    // Stop only after two consecutive rounds gain nothing, so a slow
+    // reveal gets a second chance instead of ending the loop.
     const eeoDone = new Set();
-    for (let round = 0; round < 3; round++) {
+    let emptyRounds = 0;
+    for (let round = 0; round < 5 && emptyRounds < 2; round++) {
       const native = fillEEO(pending.eeo, eeoDone);
       for (const c of native.cats) eeoDone.add(c);
       const combo = await fillEEOCombos(pending.eeo, eeoDone);
       for (const c of combo.cats) eeoDone.add(c);
       const gained = native.count + combo.count;
       count += gained;
-      if (!gained) break;
-      await sleep(400);   // give conditional questions time to render
+      emptyRounds = gained ? 0 : emptyRounds + 1;
+      await sleep(500);
     }
     for (const c of eeoDone) filledKeys.add("eeo " + c);
     return { count, filledKeys };
@@ -399,7 +405,9 @@
     close.style.cssText = `float:right;background:none;border:none;color:${P.muted};cursor:pointer;font-size:14px`;
     close.onclick = dismiss;
     const h = document.createElement("div");
-    h.innerHTML = `<strong>Job Engine autofill</strong>`;
+    h.innerHTML = `<strong>Job Engine autofill</strong>`
+      + ` <span style="color:${P.muted};font-size:11px">v`
+      + `${chrome.runtime.getManifest().version}</span>`;
     const sub = document.createElement("div");
     sub.textContent = `${pending.title || ""} @ ${pending.company || ""}`;
     sub.style.cssText = `color:${P.muted};margin:2px 0 10px`;
