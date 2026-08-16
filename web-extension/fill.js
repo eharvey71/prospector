@@ -175,12 +175,12 @@
     return out;
   }
 
-  function fillEEO(eeo) {
+  function fillEEO(eeo, done = new Set()) {
     const res = { count: 0, cats: new Set() };
     if (!eeo || !eeo.length) return res;
     for (const ctl of eeoControls()) {
       const cat = EEO_ORDER.find((c) => EEO_LABELS[c].test(ctl.label));
-      if (!cat) continue;
+      if (!cat || done.has(cat)) continue;
       const entry = eeo.find((e) => e.cat === cat);
       if (!entry) continue;
       const i = pickEEOOption(cat, entry.value, ctl.opts, eeo);
@@ -306,11 +306,21 @@
         break;
       }
     }
-    const eeoRes = fillEEO(pending.eeo);
-    const comboRes = await fillEEOCombos(pending.eeo, eeoRes.cats);
-    count += eeoRes.count + comboRes.count;
-    for (const c of eeoRes.cats) filledKeys.add("eeo " + c);
-    for (const c of comboRes.cats) filledKeys.add("eeo " + c);
+    // EEO questions reveal conditionally (answering Hispanic/Latino "No"
+    // makes the race question appear) — so fill in ROUNDS, re-scanning
+    // the page until a round finds nothing new to fill.
+    const eeoDone = new Set();
+    for (let round = 0; round < 3; round++) {
+      const native = fillEEO(pending.eeo, eeoDone);
+      for (const c of native.cats) eeoDone.add(c);
+      const combo = await fillEEOCombos(pending.eeo, eeoDone);
+      for (const c of combo.cats) eeoDone.add(c);
+      const gained = native.count + combo.count;
+      count += gained;
+      if (!gained) break;
+      await sleep(400);   // give conditional questions time to render
+    }
+    for (const c of eeoDone) filledKeys.add("eeo " + c);
     return { count, filledKeys };
   }
 
