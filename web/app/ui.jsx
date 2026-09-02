@@ -5,15 +5,15 @@ import { signOut } from "firebase/auth";
 import { auth } from "../lib/firebase";
 
 export const T = {
-  panel: "#1d2026",
-  panelAlt: "#23262d",
-  border: "#2f343c",
-  text: "#e2e4e9",
-  muted: "#9aa1ad",
-  warn: "#e0b34c",
-  danger: "#e06c75",
-  ok: "#7fbf7f",
-  accent: "#6f9ff3",
+  panel: "#ffffff",
+  panelAlt: "#f5f7fa",
+  border: "#e3e8ef",
+  text: "#1f2733",
+  muted: "#64748b",
+  warn: "#b7791f",
+  danger: "#d64550",
+  ok: "#2f9e63",
+  accent: "#4a7de2",
 };
 
 export const card = {
@@ -26,7 +26,7 @@ export const btn = {
   borderRadius: 8, padding: "8px 16px", cursor: "pointer",
 };
 export const btnPrimary = {
-  ...btn, background: T.accent, color: "#10131a", border: "none", fontWeight: 600,
+  ...btn, background: T.accent, color: "#fff", border: "none", fontWeight: 600,
 };
 export const input = {
   display: "block", width: "100%", margin: "4px 0 12px", padding: 8,

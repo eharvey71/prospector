@@ -579,6 +579,14 @@ export default function ReviewQueue() {
   ];
   const activeTab = TABS.find((t) => t.key === tab) || TABS[0];
 
+  // Left-edge stripe color keyed to where the job is in the pipeline.
+  const STRIPE = {
+    matched: "s-accent", drafted: "s-purple", in_review: "s-purple",
+    needs_human: "s-danger", approved: "s-accent", queued: "s-accent",
+    submitting: "s-accent", submitted: "s-ok", failed: "s-danger",
+    rejected: "s-muted",
+  };
+
   // One compact row per job; body renders only when expanded.
   function Row({ a, right, children, expandable = true }) {
     const p = postings[a.posting_id];
@@ -586,7 +594,7 @@ export default function ReviewQueue() {
     const open = openId === a.id;
     const tier = m.score != null ? tierOf(m.score, threshold) : null;
     return (
-      <div className={"row" + (open ? " open" : "")}>
+      <div className={"row " + (STRIPE[a.state] || "s-muted") + (open ? " open" : "")}>
         <div
           className={"rowhead" + (expandable ? "" : " static")}
           onClick={expandable ? () => setOpenId(open ? null : a.id) : undefined}

@@ -1,17 +1,23 @@
-/* Job Engine design system. One dark theme, color reserved for meaning:
-   green = good/success, amber = needs attention, red = bad, blue = action. */
+/* Job Engine design system — light theme, full-width layout.
+   White cards on a cool gray page, one navy nav bar, one blue for actions.
+   Color is reserved for meaning: green = good/success, amber = needs
+   attention, red = bad, blue = action. Rows carry a colored left edge
+   keyed to their state. */
 
 :root {
-  --bg: #15171c;
-  --panel: #1d2026;
-  --panel-alt: #23262d;
-  --border: #2f343c;
-  --text: #e2e4e9;
-  --muted: #9aa1ad;
-  --ok: #7fbf7f;
-  --warn: #e0b34c;
-  --danger: #e06c75;
-  --accent: #6f9ff3;
+  --bg: #f2f5f9;
+  --panel: #ffffff;
+  --panel-alt: #f5f7fa;
+  --border: #e3e8ef;
+  --text: #1f2733;
+  --muted: #64748b;
+  --ok: #2f9e63;
+  --warn: #b7791f;
+  --danger: #d64550;
+  --accent: #4a7de2;
+  --purple: #7c5fd3;
+  --navy: #1e2a3a;
+  --shadow: 0 1px 3px rgba(16, 24, 40, .07), 0 1px 2px rgba(16, 24, 40, .04);
   --radius: 10px;
 }
 
@@ -25,39 +31,41 @@ body {
   min-height: 100vh;
 }
 
-h1 { font-size: 20px; font-weight: 650; margin: 0 0 6px; }
+h1 { font-size: 20px; font-weight: 650; margin: 14px 0 6px; }
 a { color: var(--accent); }
 
-.container { max-width: 860px; margin: 0 auto; padding: 20px 32px 64px; }
+/* Full-page: content spans the window; the nav bar runs edge to edge. */
+.container { max-width: none; margin: 0; padding: 0 28px 64px; }
 
-/* ---------- nav ---------- */
+/* ---------- nav: dark navy bar, edge to edge ---------- */
 .nav {
   display: flex; gap: 4px; align-items: center;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 20px;
+  background: var(--navy);
+  margin: 0 -28px 20px; padding: 0 28px;
 }
-.nav .brand { font-weight: 700; margin-right: 14px; padding: 12px 0; }
+.nav .brand { font-weight: 700; margin-right: 14px; padding: 14px 0; color: #fff; }
 .nav a {
-  padding: 12px 14px; color: var(--muted); text-decoration: none;
-  border-bottom: 2px solid transparent; margin-bottom: -1px; font-size: 14px;
+  padding: 14px 14px; color: rgba(255, 255, 255, .65); text-decoration: none;
+  border-bottom: 3px solid transparent; font-size: 14px;
 }
-.nav a:hover { color: var(--text); }
-.nav a.active { color: var(--text); font-weight: 600; border-bottom-color: var(--accent); }
+.nav a:hover { color: #fff; }
+.nav a.active { color: #fff; font-weight: 600; border-bottom-color: var(--accent); }
 .nav .spacer { flex: 1; }
 .nav .signout {
-  background: none; border: none; color: var(--muted); cursor: pointer;
-  font-size: 13px; padding: 12px 0;
+  background: none; border: none; color: rgba(255, 255, 255, .65); cursor: pointer;
+  font-size: 13px; padding: 14px 0;
 }
-.nav .signout:hover { color: var(--text); }
+.nav .signout:hover { color: #fff; }
 
 /* ---------- inputs & buttons ---------- */
 input, textarea, select {
-  background: var(--panel-alt); color: var(--text);
-  border: 1px solid var(--border); border-radius: 8px;
+  background: #fff; color: var(--text);
+  border: 1px solid #d5dce6; border-radius: 8px;
   padding: 8px 10px; font: inherit; width: 100%;
 }
 input:focus, textarea:focus, select:focus {
   outline: none; border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(74, 125, 226, .15);
 }
 input[type="checkbox"] { width: auto; }
 
@@ -65,10 +73,10 @@ input[type="checkbox"] { width: auto; }
   border-radius: 8px; padding: 8px 16px; cursor: pointer; font: inherit;
   width: auto; display: inline-block; text-decoration: none;
 }
-.btn { background: var(--panel-alt); color: var(--text); border: 1px solid var(--border); }
-.btn:hover { border-color: var(--muted); }
-.btn-primary { background: var(--accent); color: #10131a; border: none; font-weight: 600; }
-.btn-primary:hover { filter: brightness(1.1); }
+.btn { background: #fff; color: var(--text); border: 1px solid #d5dce6; }
+.btn:hover { border-color: var(--muted); background: var(--panel-alt); }
+.btn-primary { background: var(--accent); color: #fff; border: none; font-weight: 600; }
+.btn-primary:hover { filter: brightness(1.07); }
 .btn-primary:disabled, .btn:disabled { opacity: .5; cursor: default; }
 .btn-ghost { background: none; border: none; color: var(--accent); padding: 8px 4px; }
 
@@ -88,13 +96,15 @@ input[type="checkbox"] { width: auto; }
   display: flex; gap: 2px; flex-wrap: wrap;
   background: var(--panel); border: 1px solid var(--border);
   border-radius: 10px; padding: 3px; margin-bottom: 6px; width: fit-content;
+  box-shadow: var(--shadow);
 }
 .tab {
   background: none; border: none; color: var(--muted); cursor: pointer;
   padding: 7px 14px; border-radius: 8px; font: inherit; font-size: 13.5px;
 }
 .tab:hover { color: var(--text); }
-.tab.active { background: var(--panel-alt); color: var(--text); font-weight: 600; }
+.tab.active { background: var(--accent); color: #fff; font-weight: 600; }
+.tab.active .n, .tab.active .n.hot { color: #fff; }
 .tab .n { margin-left: 6px; font-weight: 600; color: var(--muted); }
 .tab .n.hot { color: var(--warn); }
 .tabblurb { color: var(--muted); font-size: 12.5px; margin: 0 0 14px; }
@@ -102,9 +112,18 @@ input[type="checkbox"] { width: auto; }
 /* ---------- job rows ---------- */
 .row {
   background: var(--panel); border: 1px solid var(--border);
+  border-left-width: 4px;
   border-radius: var(--radius); margin-bottom: 8px; overflow: hidden;
+  box-shadow: var(--shadow);
 }
-.row.open { border-color: var(--muted); }
+.row.open { border-color: #c6cfdb; border-left-width: 4px; }
+/* State stripe on the left edge — the reference design's best idea. */
+.row.s-accent { border-left-color: var(--accent); }
+.row.s-purple { border-left-color: var(--purple); }
+.row.s-warn   { border-left-color: var(--warn); }
+.row.s-danger { border-left-color: var(--danger); }
+.row.s-ok     { border-left-color: var(--ok); }
+.row.s-muted  { border-left-color: #c3cbd6; }
 .rowhead {
   display: flex; align-items: center; gap: 10px;
   padding: 12px 14px; cursor: pointer; user-select: none;
@@ -122,12 +141,12 @@ input[type="checkbox"] { width: auto; }
 .pill {
   display: inline-block; padding: 1px 9px; border-radius: 999px;
   font-size: 12px; font-weight: 600; border: 1px solid var(--border);
-  color: var(--muted); white-space: nowrap;
+  color: var(--muted); background: #fff; white-space: nowrap;
 }
-.pill.ok { color: var(--ok); border-color: var(--ok); }
-.pill.warn { color: var(--warn); border-color: var(--warn); }
-.pill.danger { color: var(--danger); border-color: var(--danger); }
-.pill.accent { color: var(--accent); border-color: var(--accent); }
+.pill.ok { color: var(--ok); border-color: #bfe3cd; background: #effaf3; }
+.pill.warn { color: var(--warn); border-color: #ecd9b2; background: #fdf6e8; }
+.pill.danger { color: var(--danger); border-color: #f2c4c8; background: #fdf0f1; }
+.pill.accent { color: var(--accent); border-color: #c4d4f5; background: #f0f4fd; }
 .pill.money { color: var(--ok); }
 
 .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0 4px; }
@@ -158,6 +177,7 @@ details.fold.dangerline > summary { color: var(--danger); }
 details.panel {
   background: var(--panel); border: 1px solid var(--border);
   border-radius: var(--radius); margin-bottom: 10px;
+  box-shadow: var(--shadow);
 }
 details.panel > summary {
   cursor: pointer; font-weight: 650; font-size: 15px;
@@ -176,7 +196,7 @@ details.panel .panelbody { padding: 0 16px 16px; }
 
 /* ---------- misc ---------- */
 .banner {
-  background: var(--panel); border: 1px solid var(--danger); color: var(--danger);
+  background: #fdf0f1; border: 1px solid #f2c4c8; color: var(--danger);
   border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; font-size: 13.5px;
 }
 .savebar {
@@ -189,11 +209,11 @@ details.panel .panelbody { padding: 0 16px 16px; }
 }
 .actions { display: flex; gap: 8px; margin-top: 10px; flex-wrap: wrap; }
 
-/* ---------- section tints: super-thin colored outlines ---------- */
-details.panel.tint-blue   { border-color: rgba(111, 159, 243, .45); }
-details.panel.tint-green  { border-color: rgba(127, 191, 127, .45); }
-details.panel.tint-purple { border-color: rgba(167, 139, 218, .45); }
-details.panel.tint-amber  { border-color: rgba(224, 179, 76, .45); }
+/* ---------- section tints: colored left edges on settings steps ------- */
+details.panel.tint-blue   { border-left: 4px solid var(--accent); }
+details.panel.tint-green  { border-left: 4px solid var(--ok); }
+details.panel.tint-purple { border-left: 4px solid var(--purple); }
+details.panel.tint-amber  { border-left: 4px solid var(--warn); }
 .stepnum {
   display: inline-flex; width: 21px; height: 21px; border-radius: 50%;
   align-items: center; justify-content: center; font-size: 12px;
@@ -201,7 +221,7 @@ details.panel.tint-amber  { border-color: rgba(224, 179, 76, .45); }
 }
 .stepnum.blue { color: var(--accent); }
 .stepnum.green { color: var(--ok); }
-.stepnum.purple { color: #a78bda; }
+.stepnum.purple { color: var(--purple); }
 .stepnum.amber { color: var(--warn); }
 .grouphead {
   font-size: 11.5px; font-weight: 700; letter-spacing: .6px;
@@ -217,7 +237,7 @@ details.panel.tint-amber  { border-color: rgba(224, 179, 76, .45); }
 
 /* --- shared wait indicator (Busy component / .spinner in buttons) ------- */
 /* currentColor so it stays visible on any background: accent in .busy,
-   dark-on-accent inside .btn-primary, muted inside row meta text. */
+   white inside .btn-primary, muted inside row meta text. */
 .spinner {
   width: 15px; height: 15px; flex: none; display: inline-block;
   border-radius: 50%; box-sizing: border-box; vertical-align: -2px;
