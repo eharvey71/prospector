@@ -34,14 +34,14 @@ body {
 h1 { font-size: 20px; font-weight: 650; margin: 14px 0 6px; }
 a { color: var(--accent); }
 
-/* Full-page: content spans the window; the nav bar runs edge to edge. */
-.container { max-width: none; margin: 0; padding: 0 28px 64px; }
+.container { max-width: 860px; margin: 0 auto; padding: 20px 32px 64px; }
 
-/* ---------- nav: dark navy bar, edge to edge ---------- */
+/* ---------- nav: navy bar within the column ---------- */
 .nav {
   display: flex; gap: 4px; align-items: center;
-  background: var(--navy);
-  margin: 0 -28px 20px; padding: 0 28px;
+  background: var(--navy); border-radius: var(--radius);
+  margin: 0 0 20px; padding: 0 16px;
+  box-shadow: var(--shadow);
 }
 .nav .brand { font-weight: 700; margin-right: 14px; padding: 14px 0; color: #fff; }
 .nav a {
