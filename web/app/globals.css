@@ -10,7 +10,7 @@
   --panel-alt: #f5f7fa;
   --border: #e3e8ef;
   --text: #1f2733;
-  --muted: #64748b;
+  --muted: #4d5b70;   /* dark enough to read at 12.5px on white/gray */
   --ok: #2f9e63;
   --warn: #b7791f;
   --danger: #d64550;
@@ -36,27 +36,26 @@ a { color: var(--accent); }
 
 .container { max-width: 860px; margin: 0 auto; padding: 20px 32px 64px; }
 
-/* ---------- nav: white card bar, blue underline on the active page ----- */
+/* ---------- nav: accent-blue bar, white text ---------- */
 .nav {
   display: flex; gap: 4px; align-items: center;
-  background: var(--panel); border: 1px solid var(--border);
-  border-radius: var(--radius);
+  background: var(--accent); border-radius: var(--radius);
   margin: 0 0 20px; padding: 0 16px;
   box-shadow: var(--shadow);
 }
-.nav .brand { font-weight: 700; margin-right: 14px; padding: 14px 0; color: var(--text); }
+.nav .brand { font-weight: 700; margin-right: 14px; padding: 14px 0; color: #fff; }
 .nav a {
-  padding: 14px 14px; color: var(--muted); text-decoration: none;
+  padding: 14px 14px; color: rgba(255, 255, 255, .8); text-decoration: none;
   border-bottom: 3px solid transparent; font-size: 14px;
 }
-.nav a:hover { color: var(--text); }
-.nav a.active { color: var(--accent); font-weight: 600; border-bottom-color: var(--accent); }
+.nav a:hover { color: #fff; }
+.nav a.active { color: #fff; font-weight: 650; border-bottom-color: #fff; }
 .nav .spacer { flex: 1; }
 .nav .signout {
-  background: none; border: none; color: var(--muted); cursor: pointer;
+  background: none; border: none; color: rgba(255, 255, 255, .8); cursor: pointer;
   font-size: 13px; padding: 14px 0;
 }
-.nav .signout:hover { color: var(--text); }
+.nav .signout:hover { color: #fff; }
 
 /* ---------- inputs & buttons ---------- */
 input, textarea, select {

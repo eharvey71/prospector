@@ -9,7 +9,7 @@ export const T = {
   panelAlt: "#f5f7fa",
   border: "#e3e8ef",
   text: "#1f2733",
-  muted: "#64748b",
+  muted: "#4d5b70",
   warn: "#b7791f",
   danger: "#d64550",
   ok: "#2f9e63",
