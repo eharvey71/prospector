@@ -662,7 +662,7 @@ export default function ReviewQueue() {
         {TABS.map((t) => (
           <button key={t.key}
                   onClick={() => { tabChosen.current = true; setTab(t.key); }}
-                  className={"tab" + (t.key === tab ? " active" : "")}>
+                  className={`tab tab-${t.key}` + (t.key === tab ? " active" : "")}>
             {t.label}
             <span className={"n" + (t.count > 0 && t.urgent ? " hot" : "")}>{t.count}</span>
           </button>
