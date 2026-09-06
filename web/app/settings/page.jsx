@@ -21,6 +21,33 @@ export default function SettingsPage() {
   const [titleSynonyms, setTitleSynonyms] = useState(""); // auto-generated, editable
   const [locationsStr, setLocationsStr] = useState("");  // semicolon-separated
   const [workMode, setWorkMode] = useState("local_or_remote");
+  const [radius, setRadius] = useState("25");
+  const [expanding, setExpanding] = useState(false);
+
+  async function expandMetro() {
+    const center = locationsStr.split(";")[0]?.trim();
+    if (!center) {
+      setStatus("Type a center place first — e.g. Richmond, VA");
+      return;
+    }
+    setExpanding(true);
+    setStatus("");
+    try {
+      const call = httpsCallable(functions, "expand_metro", { timeout: 60_000 });
+      const res = await call({ center, radius: Number(radius) });
+      const cur = locationsStr.split(";").map(s => s.trim()).filter(Boolean);
+      const seen = new Set(cur.map(s => s.toLowerCase()));
+      for (const t of res.data.towns || []) {
+        if (!seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); cur.push(t); }
+      }
+      setLocationsStr(cur.join("; "));
+      setStatus("Nearby towns added — prune any you don't want, then Save settings.");
+    } catch (e) {
+      setStatus(`Couldn't find nearby towns: ${e.message}`);
+    } finally {
+      setExpanding(false);
+    }
+  }
   const [excludeCompanies, setExcludeCompanies] = useState("");
   const [minScore, setMinScore] = useState(70);
   const [autoDraft, setAutoDraft] = useState(false);
@@ -217,9 +244,25 @@ export default function SettingsPage() {
           <p className="hint">
             Jobs outside these places are filtered out before scoring — they
             never reach your queue and never cost an LLM call. Matching is
-            by city name, so list nearby towns too (e.g. Richmond, VA;
-            Glen Allen, VA; Henrico, VA).
+            by city name, so nearby towns matter — let the button below add
+            them for you.
           </p>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+            <select style={{ width: "auto" }} value={radius}
+                    onChange={e => setRadius(e.target.value)}>
+              <option value="10">within 10 miles</option>
+              <option value="25">within 25 miles</option>
+              <option value="50">within 50 miles</option>
+            </select>
+            <button className="btn" disabled={expanding} onClick={expandMetro}>
+              {expanding
+                ? <><span className="spinner sm" />Finding towns…</>
+                : "Add nearby towns"}
+            </button>
+            <span className="hint" style={{ margin: 0 }}>
+              around the first place in your list
+            </span>
+          </div>
           <span className="field-label">Work arrangement</span>
           <select value={workMode} onChange={e => setWorkMode(e.target.value)}>
             <option value="local_or_remote">

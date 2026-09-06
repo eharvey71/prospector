@@ -247,7 +247,10 @@ function HealthStrip() {
       <span title="LLM usage today (all users)">
         LLM today: {h.llm?.calls || 0} calls · {Math.round(kTok)}k tokens
         {(h.llm?.errors || 0) > 0 && (
-          <span style={{ color: "var(--warn)" }}> · {h.llm.errors} failed</span>
+          <span style={{ color: "var(--warn)" }}
+                title={h.llm?.lastError || "no error text recorded"}>
+            {" "}· {h.llm.errors} failed — hover for the latest
+          </span>
         )}
       </span>
       {errRecent && (

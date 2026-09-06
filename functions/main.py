@@ -214,6 +214,21 @@ def suggest_companies(req: https_fn.CallableRequest) -> dict:
     )
 
 
+@https_fn.on_call(timeout_sec=60, secrets=["ANTHROPIC_API_KEY"])
+def expand_metro(req: https_fn.CallableRequest) -> dict:
+    """Center + radius -> towns list for the Settings location field."""
+    if req.auth is None:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.UNAUTHENTICATED, "sign in first")
+    center = (req.data or {}).get("center", "").strip()
+    if not center:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.INVALID_ARGUMENT, "center is required")
+    radius = max(5, min(int((req.data or {}).get("radius") or 25), 100))
+    from metro import expand_metro as run
+    return {"towns": run(center, radius)}
+
+
 # ---------------------------------------------------------------------------
 # Track a company by name: resolve its ATS and register it automatically.
 # ---------------------------------------------------------------------------
