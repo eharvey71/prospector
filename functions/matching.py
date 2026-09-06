@@ -167,12 +167,17 @@ def match_posting_for_user(
         ],
         match=result,
     )
+    doc = app.model_dump(mode="json")
+    # Every list query orders by a field; Firestore EXCLUDES docs missing
+    # it. Without updatedAt at creation, score-gate rejections never
+    # appeared in the Done tab (transitions set it, creation didn't).
+    doc["updatedAt"] = datetime.now(timezone.utc)
     try:
         # create(), not set(): add_job_url's forced match and the
         # on_posting_written fan-out both score the same posting for the
         # same user concurrently — the slower write must lose, not clobber
         # (a non-forced REJECTED once overwrote a user-added MATCHED here).
-        app_ref.create(app.model_dump(mode="json"))
+        app_ref.create(doc)
     except AlreadyExists:
         log.info("uid=%s posting=%s lost creation race", uid, posting_id)
         if force:

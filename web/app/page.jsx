@@ -823,7 +823,11 @@ export default function ReviewQueue() {
                    a.state === "submitted"
                      ? <span className="pill ok">✓ submitted</span>
                      : a.state === "rejected"
-                       ? <span className="pill">skipped</span>
+                       ? ([...(a.stateHistory || []), ...(a.state_history || [])]
+                            .some((e) => (e.note || "").includes("vs threshold"))
+                            && !a.rejection_reason
+                          ? <span className="pill warn">below your bar ({a.match?.score})</span>
+                          : <span className="pill">skipped</span>)
                        : <span className="pill danger">✗ failed</span>
                  }>
               {a.state === "rejected" ? (
