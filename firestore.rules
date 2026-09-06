@@ -62,7 +62,9 @@ service cloud.firestore {
       // supposed to make (approve / reject / edit letter while in review).
       // All other state moves come from the engine via Admin SDK.
       match /applications/{appId} {
-        allow read: if isOwner(uid);
+        // Admin read is for the admin panel's per-user result stats
+        // (aggregation counts); writes remain owner/engine-only.
+        allow read: if isOwner(uid) || isAdmin();
         allow create: if false; // engine-only
         allow delete: if false;
 
@@ -104,7 +106,7 @@ service cloud.firestore {
 
       // Funnel counters the matcher writes (engine-only writes).
       match /stats/{docId} {
-        allow read: if isOwner(uid);
+        allow read: if isOwner(uid) || isAdmin();
         allow write: if false;
       }
 

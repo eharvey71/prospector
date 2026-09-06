@@ -6,7 +6,10 @@
 
 import { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
-import { collection, doc, getDoc, getDocs, setDoc, serverTimestamp } from "firebase/firestore";
+import {
+  collection, doc, getCountFromServer, getDoc, getDocs, query, setDoc,
+  serverTimestamp, where,
+} from "firebase/firestore";
 import { auth, db } from "../../lib/firebase";
 import { Busy, T, Nav, SignIn, input, label as labelStyle, btnPrimary } from "../ui";
 
@@ -59,6 +62,33 @@ export default function AdminPage() {
     })().catch((e) => setStatus(`Load failed: ${e.message}`));
   }, [isAdmin]);
 
+  // Per-user results: funnel counters + pipeline state counts via
+  // aggregation queries (server-side counts, no documents downloaded).
+  const [stats, setStats] = useState({});
+  useEffect(() => {
+    if (!isAdmin || users.length === 0) return;
+    (async () => {
+      const out = {};
+      await Promise.all(users.map(async (u) => {
+        const apps = collection(db, "users", u.uid, "applications");
+        const cnt = async (states) => (await getCountFromServer(
+          query(apps, where("state", "in", states)))).data().count;
+        const [funnel, matches, review, needs, inflight, submitted, failed,
+               rejected] = await Promise.all([
+          getDoc(doc(db, "users", u.uid, "stats", "funnel")),
+          cnt(["matched"]), cnt(["drafted", "in_review"]), cnt(["needs_human"]),
+          cnt(["approved", "queued", "submitting"]),
+          cnt(["submitted"]), cnt(["failed"]), cnt(["rejected"]),
+        ]);
+        out[u.uid] = {
+          funnel: funnel.exists() ? funnel.data() : null,
+          matches, review, needs, inflight, submitted, failed, rejected,
+        };
+      }));
+      setStats(out);
+    })().catch((e) => setStatus(`Stats load failed: ${e.message}`));
+  }, [isAdmin, users]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function save() {
     setSaving(true);
     setStatus("");
@@ -101,6 +131,52 @@ export default function AdminPage() {
         enrolled below — on top of (never instead of) each user&apos;s own
         watchlist. Enrolled users don&apos;t have to configure anything.
       </p>
+
+      <details className="panel tint-green" open>
+        <summary>Results by user</summary>
+        <div className="panelbody">
+          {users.length === 0 && <p className="hint">No users loaded.</p>}
+          {users.map((u) => {
+            const s = stats[u.uid];
+            const f = s?.funnel;
+            const ago = (v) => {
+              const d = v?.seconds ? new Date(v.seconds * 1000) : null;
+              if (!d) return null;
+              const m = Math.round((Date.now() - d.getTime()) / 60000);
+              return m < 60 ? `${m}m ago` : m < 2880
+                ? `${Math.round(m / 60)}h ago` : `${Math.round(m / 1440)}d ago`;
+            };
+            return (
+              <div key={u.uid} className="subcard">
+                <strong>{u.name}</strong>{" "}
+                <span style={{ color: T.muted, fontSize: 13 }}>{u.email}</span>
+                {!s ? (
+                  <p className="hint">counting…</p>
+                ) : (
+                  <>
+                    <div className="chips">
+                      <span className="chip">matches {s.matches}</span>
+                      <span className="chip">review {s.review}</span>
+                      <span className={"chip" + (s.needs ? " warn" : "")}>needs you {s.needs}</span>
+                      <span className="chip">in flight {s.inflight}</span>
+                      <span className={"chip" + (s.submitted ? " ok" : "")}>submitted {s.submitted}</span>
+                      <span className={"chip" + (s.failed ? " danger" : "")}>failed {s.failed}</span>
+                      <span className="chip">skipped/rejected {s.rejected}</span>
+                    </div>
+                    <p className="hint" style={{ margin: "6px 0 0" }}>
+                      {f
+                        ? `funnel: ${f.seen || 0} seen · ${f.prefiltered || 0} filtered · `
+                          + `${f.scored || 0} scored · ${f.matched || 0} matched`
+                          + (ago(f.updatedAt) ? ` · last activity ${ago(f.updatedAt)}` : "")
+                        : "no matching activity yet — check titles and boards/catalog enrollment"}
+                    </p>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </details>
 
       <details className="panel tint-purple" open>
         <summary>Boards</summary>
