@@ -20,6 +20,8 @@ export default function SettingsPage() {
   const [titles, setTitles] = useState("");           // comma-separated
   const [titleSynonyms, setTitleSynonyms] = useState(""); // auto-generated, editable
   const [remoteOnly, setRemoteOnly] = useState(false);
+  const [locationsStr, setLocationsStr] = useState("");  // semicolon-separated
+  const [remoteOk, setRemoteOk] = useState(true);
   const [excludeCompanies, setExcludeCompanies] = useState("");
   const [minScore, setMinScore] = useState(70);
   const [autoDraft, setAutoDraft] = useState(false);
@@ -52,6 +54,8 @@ export default function SettingsPage() {
         setTitles((p.titles || []).join(", "));
         setTitleSynonyms((p.title_synonyms || []).join(", "));
         setRemoteOnly(!!p.remote_only);
+        setLocationsStr((p.locations || []).join("; "));
+        setRemoteOk(p.remote_ok !== false);
         setExcludeCompanies((p.exclude_companies || []).join(", "));
         setMinScore(p.min_match_score ?? 70);
         setAutoDraft(p.auto_draft ?? false);
@@ -94,6 +98,8 @@ export default function SettingsPage() {
         titles: csv(titles),
         title_synonyms: csv(titleSynonyms),
         remote_only: remoteOnly,
+        locations: locationsStr.split(";").map(s => s.trim()).filter(Boolean),
+        remote_ok: remoteOk,
         exclude_companies: csv(excludeCompanies),
         min_match_score: Number(minScore) || 70,
         auto_draft: autoDraft,
@@ -208,6 +214,23 @@ export default function SettingsPage() {
           <textarea style={{ height: 70 }} value={titleSynonyms}
                     onChange={e => setTitleSynonyms(e.target.value)}
                     placeholder="(generated after you save new titles)" />
+          <span className="field-label">
+            Where do you want to work? (City, ST — separate several with
+            semicolons; leave blank for anywhere)
+          </span>
+          <input value={locationsStr} onChange={e => setLocationsStr(e.target.value)}
+                 placeholder="e.g. Richmond, VA" />
+          <p className="hint">
+            Jobs outside these places are filtered out before scoring — they
+            never reach your queue and never cost an LLM call. Matching is
+            by city name, so list nearby towns too (e.g. Richmond, VA;
+            Glen Allen, VA; Henrico, VA).
+          </p>
+          <label style={{ display: "block", marginTop: 10 }}>
+            <input type="checkbox" checked={remoteOk}
+                   onChange={e => setRemoteOk(e.target.checked)} />
+            {" "}Remote jobs count as local
+          </label>
           <span className="field-label">Exclude companies (comma-separated)</span>
           <input value={excludeCompanies} onChange={e => setExcludeCompanies(e.target.value)} />
           <label style={{ display: "block", marginTop: 12 }}>

@@ -219,10 +219,69 @@ def _board_watched(db: firestore.Client, uid: str, posting: dict) -> bool:
     return comp in {(s or "").lower() for s in wl.get(src, [])}
 
 
+US_STATE_NAMES = {
+    "al": "alabama", "ak": "alaska", "az": "arizona", "ar": "arkansas",
+    "ca": "california", "co": "colorado", "ct": "connecticut",
+    "de": "delaware", "fl": "florida", "ga": "georgia", "hi": "hawaii",
+    "id": "idaho", "il": "illinois", "in": "indiana", "ia": "iowa",
+    "ks": "kansas", "ky": "kentucky", "la": "louisiana", "me": "maine",
+    "md": "maryland", "ma": "massachusetts", "mi": "michigan",
+    "mn": "minnesota", "ms": "mississippi", "mo": "missouri",
+    "mt": "montana", "ne": "nebraska", "nv": "nevada",
+    "nh": "new hampshire", "nj": "new jersey", "nm": "new mexico",
+    "ny": "new york", "nc": "north carolina", "nd": "north dakota",
+    "oh": "ohio", "ok": "oklahoma", "or": "oregon", "pa": "pennsylvania",
+    "ri": "rhode island", "sc": "south carolina", "sd": "south dakota",
+    "tn": "tennessee", "tx": "texas", "ut": "utah", "vt": "vermont",
+    "va": "virginia", "wa": "washington", "wv": "west virginia",
+    "wi": "wisconsin", "wy": "wyoming", "dc": "district of columbia",
+}
+
+REMOTE_RX = re.compile(r"\b(fully )?remote\b|\bwork from home\b|\bwfh\b", re.I)
+
+
+def _location_match(wanted: list[str], posting: dict, remote_ok: bool) -> bool:
+    """Does this posting plausibly sit in one of the wanted places (or count
+    as remote, when that's acceptable)? Deliberately generous: matching the
+    CITY name in the posting's location field or the first stretch of the
+    description passes — the LLM's logistics rating still grades precision.
+    The gate exists to stop Seattle jobs reaching a Richmond-only user, not
+    to adjudicate suburbs."""
+    loc = (posting.get("location") or "").lower()
+    desc = (posting.get("descriptionText")
+            or posting.get("description_text") or "")[:2500].lower()
+    if remote_ok and (REMOTE_RX.search(loc) or REMOTE_RX.search(desc)):
+        return True
+    for w in wanted:
+        city = w.split(",")[0].strip().lower()
+        if city and re.search(rf"\b{re.escape(city)}\b", loc + " " + desc):
+            # Guard against same-name-different-state (Richmond CA vs VA):
+            # when the user gave a state AND the posting names a different
+            # one in its location field, reject the hit.
+            parts = [p.strip().lower() for p in w.split(",")]
+            want_state = parts[1] if len(parts) > 1 else ""
+            if want_state and loc:
+                want_full = US_STATE_NAMES.get(want_state, want_state)
+                other = [f"{ab}|{nm}" for ab, nm in US_STATE_NAMES.items()
+                         if ab != want_state and nm != want_full]
+                if not re.search(rf"\b({want_state}|{want_full})\b", loc) \
+                        and re.search(rf"\b({'|'.join(other)})\b", loc):
+                    continue
+            return True
+    return False
+
+
 def _prefilter(profile: UserProfile, posting: dict) -> bool:
     """Zero-cost gate before spending LLM tokens."""
     company = (posting.get("company") or "").lower()
     if company in {c.lower() for c in profile.preferences.exclude_companies}:
+        return False
+
+    # Geographic gate: when the user names places, jobs elsewhere never
+    # reach the LLM (or the queue). Empty list = anywhere, as before.
+    if profile.preferences.locations and not _location_match(
+            profile.preferences.locations, posting,
+            profile.preferences.remote_ok):
         return False
 
     # Entry-stage users can't land senior+ roles; don't score them.
@@ -272,6 +331,8 @@ def _match_prompt(profile: UserProfile, posting: dict) -> str:
     return f"""CANDIDATE (career stage: {profile.career_stage})
 Skills: {", ".join(profile.skills)}
 Location: {profile.location or "unspecified"} | Remote only: {profile.preferences.remote_only}
+Wants to work in: {", ".join(profile.preferences.locations) or "anywhere"}\
+{" (remote also acceptable)" if profile.preferences.locations and profile.preferences.remote_ok else ""}
 Work history:
 {history or "(none)"}
 Education:

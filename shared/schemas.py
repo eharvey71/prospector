@@ -118,6 +118,11 @@ class Preferences(BaseModel):
     title_synonyms: list[str] = Field(default_factory=list)
     title_synonyms_source: list[str] = Field(default_factory=list)
     remote_only: bool = False
+    # Geographic narrowing: ["Richmond, VA", ...]. Empty = anywhere (the
+    # pre-existing behavior). Enforced in the matcher's prefilter, BEFORE
+    # any LLM spend; remote_ok lets remote postings through the gate too.
+    locations: list[str] = Field(default_factory=list)
+    remote_ok: bool = True
     exclude_companies: list[str] = Field(default_factory=list)
     min_match_score: int = 70       # 0-100 gate before drafting
     auto_draft: bool = False        # True: every match immediately gets a
