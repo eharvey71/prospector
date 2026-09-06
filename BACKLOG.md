@@ -14,6 +14,23 @@ Open items, roughly by value. Move a line to Done (bottom) when shipped.
   re-score re-runs against the current profile (deliberately manual, one
   LLM call each; no bulk auto-rescore on profile edits).
 
+## Discovery hardening (from ATS research doc, 2026-09)
+- **Scheduled board validation** — probe every watchlist/catalog slug on a
+  schedule via the platforms' public endpoints; store
+  `validation_status` (active/empty/dead) + `last_validated_at`; keep dead
+  entries (don't delete) so retries don't re-add known-bad slugs; surface
+  status in Settings step 3 and the admin catalog. Then rank future
+  adapters by validated live-posting volume.
+- **Workday URL parser: both shapes + tenant retry** — support
+  `wd{n}.myworkdaysite.com/recruiting/{tenant}/{site}` (tenant in the
+  PATH) alongside classic `{tenant}.wd{n}.myworkdayjobs.com/{site}`; on
+  failure retry across common wd numbers before marking dead.
+- **Wider ATS fingerprinting** — career-page classifier should recognize
+  and store platforms we can't submit to yet (Paylocity, ADP, JazzHR,
+  SuccessFactors, PageUp, PeopleAdmin, Interfolio, Oracle HCM, iCIMS,
+  Taleo/BrassRing) as `ats_platform` on the record; follow one redirect
+  hop and check iframe srcs. Converts guesses into an ATS map.
+
 ## Bigger pieces
 - **Email outcome tracking** — read confirmation/rejection/interview mail
   (Gmail, read-only), advance post-submission states, learn which score
