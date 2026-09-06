@@ -343,10 +343,17 @@ export default function ReviewQueue() {
             orderBy("updatedAt", "desc")),
       (snap) => setInflight(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
       onErr("In flight"));
+    // No orderBy on purpose: Firestore EXCLUDES docs missing the ordered
+    // field, and engine-rejected apps created before the updatedAt fix
+    // don't have it — they'd be invisible forever. Sort client-side.
     const unsub5 = onSnapshot(
       query(base, where("state", "in", ["submitted", "failed", "rejected"]),
-            orderBy("updatedAt", "desc"), limit(25)),
-      (snap) => setDone(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+            limit(50)),
+      (snap) => {
+        const t = (v) => (v?.seconds ? v.seconds * 1000 : 0);
+        setDone(snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => t(b.updatedAt) - t(a.updatedAt)));
+      },
       onErr("Done"));
     return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
   }, [user]);
@@ -823,11 +830,7 @@ export default function ReviewQueue() {
                    a.state === "submitted"
                      ? <span className="pill ok">✓ submitted</span>
                      : a.state === "rejected"
-                       ? ([...(a.stateHistory || []), ...(a.state_history || [])]
-                            .some((e) => (e.note || "").includes("vs threshold"))
-                            && !a.rejection_reason
-                          ? <span className="pill warn">below your bar ({a.match?.score})</span>
-                          : <span className="pill">skipped</span>)
+                       ? <span className="pill">skipped</span>
                        : <span className="pill danger">✗ failed</span>
                  }>
               {a.state === "rejected" ? (
