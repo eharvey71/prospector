@@ -171,17 +171,30 @@ def _strip_fences(text: str) -> str:
 # Providers
 # ---------------------------------------------------------------------------
 
+_sdk_takes_temperature: Optional[bool] = None
+
+
 def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
                temperature: float) -> tuple[str, int, int]:
     import anthropic
 
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
+    # anthropic 1.x REMOVED the temperature parameter from
+    # Messages.create (an unbounded >=0.40 pin pulled the new major in,
+    # and every call started failing client-side with a TypeError).
+    # Feature-detect once so both SDK generations work.
+    global _sdk_takes_temperature
+    if _sdk_takes_temperature is None:
+        import inspect
+        _sdk_takes_temperature = "temperature" in inspect.signature(
+            type(client.messages).create).parameters
     kwargs: dict[str, Any] = dict(
         model=MODEL,
         max_tokens=max_tokens,
-        temperature=temperature,
         messages=[{"role": "user", "content": prompt}],
     )
+    if _sdk_takes_temperature:
+        kwargs["temperature"] = temperature
     if system:
         kwargs["system"] = system
     resp = client.messages.create(**kwargs)
