@@ -56,7 +56,7 @@ const PAGES = [
 export function Nav({ active }) {
   return (
     <nav className="nav">
-      <span className="brand">Job Engine</span>
+      <span className="brand">Prospector</span>
       {PAGES.map((p) => (
         <a key={p.href} href={p.href}
            className={p.href === active ? "active" : undefined}>

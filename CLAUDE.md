@@ -1,4 +1,4 @@
-# job-engine
+# Prospector (repo: job-engine)
 End-to-end job application pipeline. Firebase (Firestore/Functions/Hosting) +
 Cloud Run Playwright worker. Project: job-engine-c8f9c, region us-central1.
 

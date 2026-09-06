@@ -9,7 +9,7 @@
 import { useEffect, useState } from "react";
 import { Nav } from "../ui";
 
-const ZIP = "/job-engine-extension.zip";
+const ZIP = "/prospector-extension.zip";
 
 export default function ExtensionPage() {
   const [installed, setInstalled] = useState(null);   // null = still checking
@@ -89,7 +89,7 @@ export default function ExtensionPage() {
           </ol>
           <p className="hint">
             Then pin it: click the puzzle-piece icon in Chrome&apos;s toolbar
-            and pin &quot;Job Engine Autofill&quot; so its button is always
+            and pin &quot;Prospector Autofill&quot; so its button is always
             visible. Refresh this page and the banner above should turn green.
           </p>
         </div>
@@ -101,7 +101,7 @@ export default function ExtensionPage() {
           <p className="hint" style={{ marginTop: 8 }}>
             Download again, replace the contents of the same folder, then open
             <code> chrome://extensions</code> and click the reload icon (↻) on
-            the Job Engine card. Check the version in the banner above to
+            the Prospector card. Check the version in the banner above to
             confirm.
           </p>
         </div>

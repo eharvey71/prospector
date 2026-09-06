@@ -1,4 +1,4 @@
-// Runs on the Job Engine web app only. The queue page posts an autofill
+// Runs on the Prospector web app only. The queue page posts an autofill
 // payload via window.postMessage; this forwards it into extension storage
 // and acks so the page knows the extension is installed.
 const VERSION = chrome.runtime.getManifest().version;

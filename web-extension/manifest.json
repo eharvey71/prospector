@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Job Engine Autofill",
-  "version": "0.4.3",
-  "description": "Fills job application forms with your prepared answers from Job Engine, and sends any job page into the pipeline. Nothing is submitted automatically.",
+  "name": "Prospector Autofill",
+  "version": "0.4.4",
+  "description": "Fills job application forms with your prepared answers from Prospector, and sends any job page into the pipeline. Nothing is submitted automatically.",
   "permissions": [
     "storage",
     "activeTab",
@@ -10,7 +10,7 @@
     "scripting"
   ],
   "action": {
-    "default_title": "Send this job to Job Engine"
+    "default_title": "Send this job to Prospector"
   },
   "background": {
     "service_worker": "background.js"

@@ -17,7 +17,7 @@ async function setBadge() {
   await chrome.action.setTitle({
     title: pending?.url
       ? `Fill this page with: ${pending.title || "your prepared answers"}`
-      : "Send this job to Job Engine",
+      : "Send this job to Prospector",
   });
 }
 
@@ -66,11 +66,11 @@ chrome.action.onClicked.addListener(async (tab) => {
 chrome.runtime.onInstalled.addListener(() => {
   chrome.contextMenus.create({
     id: "je-fill", contexts: ["page", "editable", "selection"],
-    title: "Fill this form with Job Engine",
+    title: "Fill this form with Prospector",
   });
   chrome.contextMenus.create({
     id: "je-add", contexts: ["page", "link"],
-    title: "Add this job to Job Engine",
+    title: "Add this job to Prospector",
   });
   setBadge();
 });

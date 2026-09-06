@@ -25,12 +25,12 @@ echo "==> [2/6] syncing shared/ into functions/ and worker/"
 ./sync_shared.sh
 
 echo "==> [3/6] packaging the browser extension for the in-app download"
-# Served at /job-engine-extension.zip by the Extension page. Rebuilt every
+# Served at /prospector-extension.zip by the Extension page. Rebuilt every
 # deploy so the download can never lag behind the code.
 mkdir -p web/public
-rm -f web/public/job-engine-extension.zip
-(cd web-extension && zip -qr ../web/public/job-engine-extension.zip . -x '.*')
-echo "    $(unzip -l web/public/job-engine-extension.zip | tail -1 | xargs)"
+rm -f web/public/prospector-extension.zip
+(cd web-extension && zip -qr ../web/public/prospector-extension.zip . -x '.*')
+echo "    $(unzip -l web/public/prospector-extension.zip | tail -1 | xargs)"
 
 echo "==> [4/6] building web"
 (cd web && npm run build)

@@ -405,7 +405,7 @@
     close.style.cssText = `float:right;background:none;border:none;color:${P.muted};cursor:pointer;font-size:14px`;
     close.onclick = dismiss;
     const h = document.createElement("div");
-    h.innerHTML = `<strong>Job Engine autofill</strong>`
+    h.innerHTML = `<strong>Prospector autofill</strong>`
       + ` <span style="color:${P.muted};font-size:11px">v`
       + `${chrome.runtime.getManifest().version}</span>`;
     const sub = document.createElement("div");

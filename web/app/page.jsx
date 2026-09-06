@@ -556,7 +556,7 @@ export default function ReviewQueue() {
   if (!user) {
     return (
       <main className="container">
-        <h1>Job Engine</h1>
+        <h1>Prospector</h1>
         <button className="btn-primary" onClick={() => signInWithPopup(auth, googleProvider)}>
           Sign in with Google
         </button>
