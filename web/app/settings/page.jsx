@@ -6,11 +6,11 @@
 // profile fields edited on the other page (and vice versa).
 
 import { useEffect, useState } from "react";
-import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
+import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
-import { auth, db, functions, googleProvider } from "../../lib/firebase";
-import { Busy, T, Nav, box, btn, btnPrimary, input, label } from "../ui";
+import { auth, db, functions } from "../../lib/firebase";
+import { Busy, T, Nav, SignIn, box, btn, btnPrimary, input, label } from "../ui";
 
 export default function SettingsPage() {
   const [user, setUser] = useState(null);
@@ -182,16 +182,7 @@ export default function SettingsPage() {
     setSuggestions(list => list.filter(x => x.slug !== s.slug));
   }
 
-  if (!user) {
-    return (
-      <main className="container">
-        <h1>Settings</h1>
-        <button className="btn-primary" onClick={() => signInWithPopup(auth, googleProvider)}>
-          Sign in with Google
-        </button>
-      </main>
-    );
-  }
+  if (!user) return <SignIn title="Settings" />;
 
   return (
     <main className="container">

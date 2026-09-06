@@ -3,15 +3,15 @@
 // details, letter, and actions. Color is reserved for meaning.
 
 import { useEffect, useRef, useState } from "react";
-import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
+import { onAuthStateChanged } from "firebase/auth";
 import {
   collection, doc, getDoc, limit, onSnapshot, orderBy, query,
   serverTimestamp, updateDoc, where, arrayUnion,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { ref as storageRef, getDownloadURL } from "firebase/storage";
-import { auth, db, functions, googleProvider, storage } from "../lib/firebase";
-import { Busy, Nav } from "./ui";
+import { auth, db, functions, storage } from "../lib/firebase";
+import { Busy, Nav, SignIn } from "./ui";
 
 const ANSWER_LABELS = {
   why_company: "Why this company",
@@ -553,16 +553,7 @@ export default function ReviewQueue() {
     }, 600);
   }
 
-  if (!user) {
-    return (
-      <main className="container">
-        <h1>Prospector</h1>
-        <button className="btn-primary" onClick={() => signInWithPopup(auth, googleProvider)}>
-          Sign in with Google
-        </button>
-      </main>
-    );
-  }
+  if (!user) return <SignIn />;
 
   // Pipeline order: a job moves left to right through these tabs.
   const TABS = [

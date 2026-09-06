@@ -2,8 +2,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { onAuthStateChanged, signOut } from "firebase/auth";
-import { auth } from "../lib/firebase";
+import {
+  isSignInWithEmailLink, onAuthStateChanged, sendSignInLinkToEmail,
+  signInWithEmailLink, signInWithPopup, signOut,
+} from "firebase/auth";
+import { auth, googleProvider } from "../lib/firebase";
 
 export const T = {
   panel: "#ffffff",
@@ -35,6 +38,80 @@ export const input = {
   border: `1px solid ${T.border}`, borderRadius: 8,
 };
 export const label = { fontSize: 13, fontWeight: 600, color: T.muted };
+
+// One sign-in screen for every page: Google popup, or an emailed
+// sign-in link (passwordless). The same component also FINISHES a link
+// sign-in: when the page loads from the emailed URL, it completes the
+// exchange and cleans the address bar. It only renders while signed
+// out, which is exactly when a link-click lands.
+const EMAIL_KEY = "prospector_signin_email";
+
+export function SignIn({ title = "Prospector" }) {
+  const [email, setEmail] = useState("");
+  const [status, setStatus] = useState("");
+  const [busyLabel, setBusyLabel] = useState("");
+
+  useEffect(() => {
+    if (!isSignInWithEmailLink(auth, window.location.href)) return;
+    let addr = "";
+    try { addr = window.localStorage.getItem(EMAIL_KEY) || ""; } catch { /* blocked */ }
+    // Link opened on a different device/browser than requested from:
+    // Firebase requires the email again as proof.
+    if (!addr) addr = window.prompt("Confirm your email to finish signing in") || "";
+    if (!addr) { setStatus("Sign-in not finished — email not confirmed."); return; }
+    setBusyLabel("Finishing sign-in…");
+    signInWithEmailLink(auth, addr, window.location.href)
+      .then(() => {
+        try { window.localStorage.removeItem(EMAIL_KEY); } catch { /* ok */ }
+        window.history.replaceState({}, "", window.location.pathname);
+      })
+      .catch((e) => setStatus(`Sign-in link failed: ${e.message}`))
+      .finally(() => setBusyLabel(""));
+  }, []);
+
+  async function sendLink() {
+    const addr = email.trim();
+    if (!addr) return;
+    setBusyLabel("Sending the link…");
+    setStatus("");
+    try {
+      await sendSignInLinkToEmail(auth, addr, {
+        url: window.location.origin + window.location.pathname,
+        handleCodeInApp: true,
+      });
+      try { window.localStorage.setItem(EMAIL_KEY, addr); } catch { /* ok */ }
+      setStatus(`Sign-in link sent to ${addr} — check your inbox and open `
+        + `it on this device.`);
+    } catch (e) {
+      setStatus(`Couldn't send the link: ${e.message}`);
+    } finally {
+      setBusyLabel("");
+    }
+  }
+
+  return (
+    <main className="container" style={{ maxWidth: 440 }}>
+      <h1 style={{ marginTop: 48 }}>{title}</h1>
+      <div style={{ background: T.panel, border: `1px solid ${T.border}`,
+                    borderRadius: 10, padding: 20 }}>
+        <button className="btn-primary" style={{ width: "100%" }}
+                onClick={() => signInWithPopup(auth, googleProvider)}>
+          Sign in with Google
+        </button>
+        <div className="orline">or use a sign-in link</div>
+        <input value={email} placeholder="you@example.com" type="email"
+               onChange={(e) => setEmail(e.target.value)}
+               onKeyDown={(e) => e.key === "Enter" && sendLink()} />
+        <button className="btn" style={{ width: "100%", marginTop: 8 }}
+                disabled={!!busyLabel} onClick={sendLink}>
+          Email me a sign-in link
+        </button>
+        {busyLabel && <Busy label={busyLabel} />}
+        {status && <p className="hint" style={{ marginTop: 10 }}>{status}</p>}
+      </div>
+    </main>
+  );
+}
 
 // THE wait indicator. Anywhere the user waits on the engine, render this
 // (or put <span className="spinner sm" /> inside a button) — one look for

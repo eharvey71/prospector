@@ -8,11 +8,11 @@
 // submission worker's adapter fetches from.
 
 import { useEffect, useState } from "react";
-import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
+import { onAuthStateChanged } from "firebase/auth";
 import { deleteDoc, doc, getDoc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
 import { ref, uploadBytes, getMetadata } from "firebase/storage";
-import { auth, db, googleProvider, storage } from "../../lib/firebase";
-import { Busy, T, Nav, box, btn, btnPrimary, input, label } from "../ui";
+import { auth, db, storage } from "../../lib/firebase";
+import { Busy, T, Nav, SignIn, box, btn, btnPrimary, input, label } from "../ui";
 
 const EMPTY_ROLE = { company: "", title: "", start: "", end: "", bullets: [""] };
 const EMPTY_SAMPLE = { title: "", text: "" };
@@ -218,16 +218,7 @@ export default function ProfilePage() {
   const setProject = (i, patch) =>
     setProjects(p => p.map((x, j) => (j === i ? { ...x, ...patch } : x)));
 
-  if (!user) {
-    return (
-      <main className="container">
-        <h1>Profile</h1>
-        <button style={btnPrimary} onClick={() => signInWithPopup(auth, googleProvider)}>
-          Sign in with Google
-        </button>
-      </main>
-    );
-  }
+  if (!user) return <SignIn title="Profile" />;
 
   return (
     <main className="container">
