@@ -126,10 +126,6 @@ class Preferences(BaseModel):
     #   local_only       only jobs in my places; remote-only postings skip
     #   remote_only      only remote postings, wherever the company is
     work_mode: str = "local_or_remote"
-    # Match against the whole shared posting pool instead of only boards on
-    # this user's own watchlist. Off by default: the scoping exists because
-    # cross-user board bleed produced wrong hits and doubled spend.
-    match_all_boards: bool = False
     # Legacy flags, still read for docs saved before work_mode existed.
     remote_only: bool = False
     remote_ok: bool = True

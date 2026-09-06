@@ -51,7 +51,6 @@ export default function SettingsPage() {
   const [excludeCompanies, setExcludeCompanies] = useState("");
   const [minScore, setMinScore] = useState(70);
   const [autoDraft, setAutoDraft] = useState(false);
-  const [matchAllBoards, setMatchAllBoards] = useState(false);
   const [salaryStrategy, setSalaryStrategy] = useState("exact");
   const [tailorResume, setTailorResume] = useState(false);
   const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
@@ -88,7 +87,6 @@ export default function SettingsPage() {
         setExcludeCompanies((p.exclude_companies || []).join(", "));
         setMinScore(p.min_match_score ?? 70);
         setAutoDraft(p.auto_draft ?? false);
-        setMatchAllBoards(!!p.match_all_boards);
         setSalaryStrategy(p.salary_strategy || "exact");
         setTailorResume(p.tailor_resume ?? false);
       }
@@ -135,7 +133,6 @@ export default function SettingsPage() {
         exclude_companies: csv(excludeCompanies),
         min_match_score: Number(minScore) || 70,
         auto_draft: autoDraft,
-        match_all_boards: matchAllBoards,
         salary_strategy: salaryStrategy,
         tailor_resume: tailorResume,
       },
@@ -382,19 +379,6 @@ export default function SettingsPage() {
             Filled automatically by step 2 — edit or prune freely. Every crawl
             (every 6 hours) pulls fresh jobs from all of these.
           </p>
-          <label style={{ display: "block", margin: "10px 0" }}>
-            <input type="checkbox" checked={matchAllBoards}
-                   onChange={e => setMatchAllBoards(e.target.checked)} />
-            {" "}Match me against <strong>every</strong> board anyone here
-            watches — skip curating my own lists
-          </label>
-          {matchAllBoards && (
-            <p className="hint">
-              Your step-1 titles do the narrowing instead (they must be set —
-              with no titles this switch does nothing). First crawl after
-              enabling scores a backlog, so expect extra LLM usage once.
-            </p>
-          )}
           <p className="grouphead">Fully automated — the engine can submit for you</p>
           <span className="field-label">Greenhouse (the SLUG in boards.greenhouse.io/SLUG)</span>
           <input value={ghBoards} onChange={e => setGhBoards(e.target.value)} />

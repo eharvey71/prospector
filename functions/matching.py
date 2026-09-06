@@ -120,12 +120,8 @@ def match_posting_for_user(
     # Source scoping: users are matched only against boards THEY watch.
     # Postings are a global pool (crawled from the union of all watchlists),
     # and without this check every user got scored against every other
-    # user's boards — wrong hits, wasted LLM spend. match_all_boards is the
-    # per-user opt OUT of that scoping (guarded: with no titles set, the
-    # prefilter can't narrow, and the whole pool would hit the LLM).
-    match_all = (profile.preferences.match_all_boards
-                 and bool(profile.preferences.titles))
-    if not force and not match_all and not _board_watched(db, uid, posting):
+    # user's boards — wrong hits, wasted LLM spend.
+    if not force and not _board_watched(db, uid, posting):
         return
 
     app_id = posting_id  # one application per posting per user; natural dedup
