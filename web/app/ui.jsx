@@ -1,7 +1,8 @@
 // Shared theme constants (for the pages still using inline styles) + nav.
 "use client";
 
-import { signOut } from "firebase/auth";
+import { useEffect, useState } from "react";
+import { onAuthStateChanged, signOut } from "firebase/auth";
 import { auth } from "../lib/firebase";
 
 export const T = {
@@ -54,6 +55,8 @@ const PAGES = [
 ];
 
 export function Nav({ active }) {
+  const [email, setEmail] = useState("");
+  useEffect(() => onAuthStateChanged(auth, (u) => setEmail(u?.email || "")), []);
   return (
     <nav className="nav">
       <span className="brand">Prospector</span>
@@ -64,6 +67,7 @@ export function Nav({ active }) {
         </a>
       ))}
       <span className="spacer" />
+      {email && <span className="navmail">{email}</span>}
       <button className="signout" onClick={() => signOut(auth)}>Sign out</button>
     </nav>
   );
