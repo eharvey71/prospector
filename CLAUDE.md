@@ -23,6 +23,10 @@ idempotent). Human transitions (approve/reject) enforced in firestore.rules.
   image version.
 - The enqueue in functions/main.py must advance state to queued BEFORE
   creating the Cloud Task (race condition, fixed once already).
+- The admin global board catalog COMPLEMENTS per-user watchlists, never
+  replaces them. Admin offers, user can decline — no silent forcing.
+
+Backlog lives in BACKLOG.md (not here — this file is invariants only).
 
 ## Known quirks
 - Greenhouse pages contain ~230 hidden [role=option] entries from the phone
