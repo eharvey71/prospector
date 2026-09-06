@@ -18,6 +18,11 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
+    // Admin = custom auth claim, set by scripts/set_admin.py (Admin SDK).
+    function isAdmin() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
     // ------------------------------------------------------------------
     // Global job postings: read-only to clients. The discovery functions
     // write these through the Admin SDK, which bypasses these rules.
@@ -37,8 +42,18 @@ service cloud.firestore {
     // ------------------------------------------------------------------
     // Per-user data
     // ------------------------------------------------------------------
+    // Global board catalog, curated by the admin, complements per-user
+    // watchlists. Lives under a subcollection NAMED "watchlist" so the
+    // crawler's collection_group("watchlist") union picks it up unchanged.
+    match /config/global/watchlist/{docId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
     match /users/{uid} {
-      allow read: if isOwner(uid);
+      // Admin may read (the admin page lists users for enrollment);
+      // writes stay owner-only.
+      allow read: if isOwner(uid) || isAdmin();
       // Profile edits from the client are fine; the engine also writes here.
       allow create, update: if isOwner(uid);
       allow delete: if false;

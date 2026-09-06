@@ -207,21 +207,50 @@ def _revive_if_terminal(app_ref, current: dict) -> None:
     log.info("revived %s from %s -> matched", app_ref.id, state)
 
 
+_global_wl_cache: dict = {"ts": 0.0, "doc": None}
+
+
+def _global_watchlist(db: firestore.Client) -> dict:
+    """The admin-curated catalog at config/global/watchlist/companies —
+    same shape as a user watchlist, plus enrollment fields (enroll_all /
+    enrolled_uids). Cached 60s: the fan-out calls this once per user per
+    posting, and the doc changes rarely."""
+    import time
+    now = time.monotonic()
+    if now - _global_wl_cache["ts"] > 60:
+        _global_wl_cache["doc"] = (
+            db.collection("config").document("global")
+            .collection("watchlist").document("companies").get().to_dict() or {})
+        _global_wl_cache["ts"] = now
+    return _global_wl_cache["doc"] or {}
+
+
 def _board_watched(db: firestore.Client, uid: str, posting: dict) -> bool:
-    """Is this posting's board on the user's own watchlist? Postings with
-    source=unknown (pasted URLs, career-page crawls) can't be attributed to
-    a board and stay visible to everyone."""
+    """Is this posting's board on the user's own watchlist, or on the
+    global catalog the admin enrolled them in? Global COMPLEMENTS personal
+    lists, never replaces them. Postings with source=unknown (pasted URLs,
+    career-page crawls) can't be attributed to a board and stay visible to
+    everyone."""
     src = posting.get("source", "unknown")
     if src == "unknown":
         return True
-    wl = (db.collection("users").document(uid)
-          .collection("watchlist").document("companies").get().to_dict() or {})
     comp = (posting.get("company") or "").lower()
-    if src == "workday":
-        # watchlist stores full myworkdayjobs URLs; company is the tenant
-        return any(comp and comp in (u or "").lower()
-                   for u in wl.get("workday", []))
-    return comp in {(s or "").lower() for s in wl.get(src, [])}
+
+    lists = [(db.collection("users").document(uid)
+              .collection("watchlist").document("companies").get().to_dict() or {})]
+    g = _global_watchlist(db)
+    if g and (g.get("enroll_all") or uid in (g.get("enrolled_uids") or [])):
+        lists.append(g)
+
+    for wl in lists:
+        if src == "workday":
+            # watchlist stores full myworkdayjobs URLs; company is the tenant
+            if any(comp and comp in (u or "").lower()
+                   for u in wl.get("workday", [])):
+                return True
+        elif comp in {(s or "").lower() for s in wl.get(src, [])}:
+            return True
+    return False
 
 
 US_STATE_NAMES = {

@@ -133,11 +133,20 @@ const PAGES = [
 
 export function Nav({ active }) {
   const [email, setEmail] = useState("");
-  useEffect(() => onAuthStateChanged(auth, (u) => setEmail(u?.email || "")), []);
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => onAuthStateChanged(auth, async (u) => {
+    setEmail(u?.email || "");
+    try {
+      setIsAdmin(!!u && !!(await u.getIdTokenResult()).claims.admin);
+    } catch {
+      setIsAdmin(false);
+    }
+  }), []);
+  const pages = isAdmin ? [...PAGES, { href: "/admin", title: "Admin" }] : PAGES;
   return (
     <nav className="nav">
       <span className="brand">Prospector</span>
-      {PAGES.map((p) => (
+      {pages.map((p) => (
         <a key={p.href} href={p.href}
            className={p.href === active ? "active" : undefined}>
           {p.title}
