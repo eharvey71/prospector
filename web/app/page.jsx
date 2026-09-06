@@ -291,6 +291,7 @@ export default function ReviewQueue() {
   const [done, setDone] = useState([]);
   const [postings, setPostings] = useState({});
   const [draftingIds, setDraftingIds] = useState([]);
+  const [skippingId, setSkippingId] = useState(null); // row showing skip reasons
   const [threshold, setThreshold] = useState(70);
   const [tab, setTab] = useState("matches");
   const tabChosen = useRef(false);   // stop auto-selection once the user
@@ -424,12 +425,13 @@ export default function ReviewQueue() {
     }
   }
 
-  async function transition(appId, to, note) {
+  async function transition(appId, to, note, extra = {}) {
     const ref = doc(db, "users", user.uid, "applications", appId);
     await updateDoc(ref, {
       state: to,
       stateHistory: arrayUnion({ state: to, ts: new Date(), note }),
       updatedAt: serverTimestamp(),
+      ...extra,
     });
   }
 
@@ -758,10 +760,35 @@ export default function ReviewQueue() {
                   Apply without letter
                 </button>
                 <button className="btn"
-                        onClick={() => transition(a.id, "rejected", "skipped from matches")}>
+                        onClick={() => setSkippingId(skippingId === a.id ? null : a.id)}>
                   Skip
                 </button>
               </div>
+              {skippingId === a.id && (
+                <div className="actions" style={{ alignItems: "center" }}>
+                  <span className="hint" style={{ margin: 0 }}>Why? (teaches the engine)</span>
+                  {["Wrong location", "Too senior", "Wrong field",
+                    "Salary too low", "Not this company", "Just not interested"]
+                    .map((r) => (
+                      <button key={r} className="btn"
+                              style={{ padding: "4px 10px", fontSize: 12.5 }}
+                              onClick={() => {
+                                setSkippingId(null);
+                                transition(a.id, "rejected", `skipped: ${r}`,
+                                           { rejection_reason: r });
+                              }}>
+                        {r}
+                      </button>
+                    ))}
+                  <button className="btn" style={{ padding: "4px 10px", fontSize: 12.5 }}
+                          onClick={() => {
+                            setSkippingId(null);
+                            transition(a.id, "rejected", "skipped from matches");
+                          }}>
+                    No reason — just skip
+                  </button>
+                </div>
+              )}
             </Row>
           ))}
         </>
@@ -797,12 +824,19 @@ export default function ReviewQueue() {
                        : <span className="pill danger">✗ failed</span>
                  }>
               {a.state === "rejected" ? (
-                <div className="actions" style={{ marginTop: 10 }}>
-                  <button className="btn" onClick={() =>
-                    transition(a.id, "matched", "un-skipped from Done")}>
-                    Put it back in Matches
-                  </button>
-                </div>
+                <>
+                  {a.rejection_reason && (
+                    <p className="hint" style={{ marginTop: 8 }}>
+                      Skipped: {a.rejection_reason}
+                    </p>
+                  )}
+                  <div className="actions" style={{ marginTop: 10 }}>
+                    <button className="btn" onClick={() =>
+                      transition(a.id, "matched", "un-skipped from Done")}>
+                      Put it back in Matches
+                    </button>
+                  </div>
+                </>
               ) : a.state === "submitted" ? (
                 <p className="hint" style={{ marginTop: 10 }}>
                   Submitted{a.submission?.confirmedAt ? ` — ${new Date(

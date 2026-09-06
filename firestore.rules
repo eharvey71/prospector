@@ -75,9 +75,10 @@ service cloud.firestore {
         }
 
         function onlyEditableFieldsChanged() {
-          // Clients may touch: state, letter, screeningAnswers, reviewNote.
+          // Clients may touch: state, letter, screeningAnswers, reviewNote,
+          // and the skip-reason label captured on rejection.
           return request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['state', 'stateHistory', 'letter', 'screeningAnswers', 'reviewNote', 'updatedAt']);
+            .hasOnly(['state', 'stateHistory', 'letter', 'screeningAnswers', 'reviewNote', 'rejection_reason', 'updatedAt']);
         }
       }
 

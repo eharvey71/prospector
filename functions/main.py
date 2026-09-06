@@ -207,6 +207,8 @@ def suggest_companies(req: https_fn.CallableRequest) -> dict:
         role, exclude,
         location=profile.get("location") or "",
         remote_only=bool(prefs.get("remote_only")),
+        wanted_locations=prefs.get("locations") or [],
+        work_mode=prefs.get("work_mode") or "local_or_remote",
         titles=prefs.get("titles") or [],
         skills=profile.get("skills") or [],
     )

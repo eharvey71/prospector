@@ -243,7 +243,9 @@ export default function SettingsPage() {
         <div className="panelbody">
           <p className="hint" style={{ marginTop: 8 }}>
             Everything you Add or Track here is written into step 3&apos;s lists
-            automatically — finish with Save settings to keep it.
+            automatically — finish with Save settings to keep it. Your
+            step-1 places and work arrangement steer suggestions: with
+            locations set, you&apos;ll get employers that actually hire there.
           </p>
           <span className="field-label">Describe the role you want</span>
           <textarea style={{ height: 60 }}
