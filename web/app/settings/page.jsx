@@ -19,9 +19,8 @@ export default function SettingsPage() {
 
   const [titles, setTitles] = useState("");           // comma-separated
   const [titleSynonyms, setTitleSynonyms] = useState(""); // auto-generated, editable
-  const [remoteOnly, setRemoteOnly] = useState(false);
   const [locationsStr, setLocationsStr] = useState("");  // semicolon-separated
-  const [remoteOk, setRemoteOk] = useState(true);
+  const [workMode, setWorkMode] = useState("local_or_remote");
   const [excludeCompanies, setExcludeCompanies] = useState("");
   const [minScore, setMinScore] = useState(70);
   const [autoDraft, setAutoDraft] = useState(false);
@@ -53,9 +52,11 @@ export default function SettingsPage() {
         const p = snap.data().preferences || {};
         setTitles((p.titles || []).join(", "));
         setTitleSynonyms((p.title_synonyms || []).join(", "));
-        setRemoteOnly(!!p.remote_only);
         setLocationsStr((p.locations || []).join("; "));
-        setRemoteOk(p.remote_ok !== false);
+        // Legacy docs have only the old checkbox pair — derive the mode.
+        setWorkMode(p.work_mode
+          || (p.remote_only ? "remote_only"
+              : p.remote_ok === false ? "local_only" : "local_or_remote"));
         setExcludeCompanies((p.exclude_companies || []).join(", "));
         setMinScore(p.min_match_score ?? 70);
         setAutoDraft(p.auto_draft ?? false);
@@ -97,9 +98,11 @@ export default function SettingsPage() {
       preferences: {
         titles: csv(titles),
         title_synonyms: csv(titleSynonyms),
-        remote_only: remoteOnly,
         locations: locationsStr.split(";").map(s => s.trim()).filter(Boolean),
-        remote_ok: remoteOk,
+        work_mode: workMode,
+        // Kept in sync for anything still reading the legacy flags.
+        remote_only: workMode === "remote_only",
+        remote_ok: workMode !== "local_only",
         exclude_companies: csv(excludeCompanies),
         min_match_score: Number(minScore) || 70,
         auto_draft: autoDraft,
@@ -226,17 +229,20 @@ export default function SettingsPage() {
             by city name, so list nearby towns too (e.g. Richmond, VA;
             Glen Allen, VA; Henrico, VA).
           </p>
-          <label style={{ display: "block", marginTop: 10 }}>
-            <input type="checkbox" checked={remoteOk}
-                   onChange={e => setRemoteOk(e.target.checked)} />
-            {" "}Remote jobs count as local
-          </label>
+          <span className="field-label">Work arrangement</span>
+          <select value={workMode} onChange={e => setWorkMode(e.target.value)}>
+            <option value="local_or_remote">
+              On-site in my places, or fully remote
+            </option>
+            <option value="local_only">
+              Only in my places — skip remote-only jobs
+            </option>
+            <option value="remote_only">
+              Remote only — wherever the company is
+            </option>
+          </select>
           <span className="field-label">Exclude companies (comma-separated)</span>
           <input value={excludeCompanies} onChange={e => setExcludeCompanies(e.target.value)} />
-          <label style={{ display: "block", marginTop: 12 }}>
-            <input type="checkbox" checked={remoteOnly}
-                   onChange={e => setRemoteOnly(e.target.checked)} /> Remote only
-          </label>
         </div>
       </details>
 

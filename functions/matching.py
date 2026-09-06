@@ -240,18 +240,38 @@ US_STATE_NAMES = {
 REMOTE_RX = re.compile(r"\b(fully )?remote\b|\bwork from home\b|\bwfh\b", re.I)
 
 
-def _location_match(wanted: list[str], posting: dict, remote_ok: bool) -> bool:
-    """Does this posting plausibly sit in one of the wanted places (or count
-    as remote, when that's acceptable)? Deliberately generous: matching the
-    CITY name in the posting's location field or the first stretch of the
-    description passes — the LLM's logistics rating still grades precision.
-    The gate exists to stop Seattle jobs reaching a Richmond-only user, not
-    to adjudicate suburbs."""
+def _work_mode(prefs) -> str:
+    """The stored work_mode, or its meaning derived from the legacy
+    checkbox pair for docs saved before it existed."""
+    mode = getattr(prefs, "work_mode", "") or ""
+    if mode in ("local_or_remote", "local_only", "remote_only"):
+        return mode
+    if prefs.remote_only:
+        return "remote_only"
+    return "local_or_remote" if prefs.remote_ok else "local_only"
+
+
+def _passes_location_gate(prefs, posting: dict) -> bool:
+    """One gate for place + work arrangement, enforced pre-LLM.
+    Deliberately generous on place: matching the CITY name in the
+    posting's location field or the first stretch of the description
+    passes — the LLM's logistics rating still grades precision. The gate
+    exists to stop Seattle jobs reaching a Richmond-only user, not to
+    adjudicate suburbs."""
     loc = (posting.get("location") or "").lower()
     desc = (posting.get("descriptionText")
             or posting.get("description_text") or "")[:2500].lower()
-    if remote_ok and (REMOTE_RX.search(loc) or REMOTE_RX.search(desc)):
+    remote = bool(REMOTE_RX.search(loc) or REMOTE_RX.search(desc))
+    mode = _work_mode(prefs)
+    if mode == "remote_only":
+        return remote
+    if not prefs.locations:
         return True
+    local = _city_match(prefs.locations, loc, desc)
+    return local or (remote and mode == "local_or_remote")
+
+
+def _city_match(wanted: list[str], loc: str, desc: str) -> bool:
     for w in wanted:
         city = w.split(",")[0].strip().lower()
         if city and re.search(rf"\b{re.escape(city)}\b", loc + " " + desc):
@@ -277,11 +297,10 @@ def _prefilter(profile: UserProfile, posting: dict) -> bool:
     if company in {c.lower() for c in profile.preferences.exclude_companies}:
         return False
 
-    # Geographic gate: when the user names places, jobs elsewhere never
-    # reach the LLM (or the queue). Empty list = anywhere, as before.
-    if profile.preferences.locations and not _location_match(
-            profile.preferences.locations, posting,
-            profile.preferences.remote_ok):
+    # Place + work-arrangement gate: jobs outside the wanted places (or
+    # non-remote jobs for a remote-only user) never reach the LLM or the
+    # queue. No locations + a local mode = anywhere, as before.
+    if not _passes_location_gate(profile.preferences, posting):
         return False
 
     # Entry-stage users can't land senior+ roles; don't score them.
@@ -328,11 +347,15 @@ def _match_prompt(profile: UserProfile, posting: dict) -> str:
         for p in profile.projects
     )
     desc = (posting.get("descriptionText") or posting.get("description_text") or "")[:6000]
+    mode_text = {
+        "local_or_remote": "on-site there or fully remote",
+        "local_only": "on-site there only — remote-only roles don't suit",
+        "remote_only": "remote only",
+    }[_work_mode(profile.preferences)]
     return f"""CANDIDATE (career stage: {profile.career_stage})
 Skills: {", ".join(profile.skills)}
-Location: {profile.location or "unspecified"} | Remote only: {profile.preferences.remote_only}
-Wants to work in: {", ".join(profile.preferences.locations) or "anywhere"}\
-{" (remote also acceptable)" if profile.preferences.locations and profile.preferences.remote_ok else ""}
+Location: {profile.location or "unspecified"}
+Wants to work in: {", ".join(profile.preferences.locations) or "anywhere"} ({mode_text})
 Work history:
 {history or "(none)"}
 Education:

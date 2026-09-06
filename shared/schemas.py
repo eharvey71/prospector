@@ -117,11 +117,17 @@ class Preferences(BaseModel):
     # current synonyms were built from (the trigger's loop guard).
     title_synonyms: list[str] = Field(default_factory=list)
     title_synonyms_source: list[str] = Field(default_factory=list)
-    remote_only: bool = False
-    # Geographic narrowing: ["Richmond, VA", ...]. Empty = anywhere (the
-    # pre-existing behavior). Enforced in the matcher's prefilter, BEFORE
-    # any LLM spend; remote_ok lets remote postings through the gate too.
+    # Geographic narrowing: ["Richmond, VA", ...]. Empty = anywhere.
+    # Enforced in the matcher's prefilter, BEFORE any LLM spend.
     locations: list[str] = Field(default_factory=list)
+    # One work-arrangement control (replaces the remote_only/remote_ok
+    # checkbox pair, which contradicted each other):
+    #   local_or_remote  jobs in my places, plus fully-remote jobs
+    #   local_only       only jobs in my places; remote-only postings skip
+    #   remote_only      only remote postings, wherever the company is
+    work_mode: str = "local_or_remote"
+    # Legacy flags, still read for docs saved before work_mode existed.
+    remote_only: bool = False
     remote_ok: bool = True
     exclude_companies: list[str] = Field(default_factory=list)
     min_match_score: int = 70       # 0-100 gate before drafting
