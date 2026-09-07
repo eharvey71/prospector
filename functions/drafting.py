@@ -8,6 +8,7 @@ experience the user doesn't have.
 from __future__ import annotations
 
 import logging
+import re
 
 from google.cloud import firestore
 from pydantic import BaseModel, Field
@@ -24,7 +25,9 @@ sentence rhythm, vocabulary level, and directness. Hard rules: never claim \
 experience not present in the stated facts (work history, education, \
 projects); no "I am excited to apply"; no "passionate"; no restating the job \
 description back at the company; 250-350 words; specific over general in \
-every sentence. For an early-career candidate, education and projects ARE \
+every sentence. NEVER use em dashes or en dashes (— –): they read as \
+AI-written. Use a period, a comma, or a colon instead. For an \
+early-career candidate, education and projects ARE \
 the story — write them with the same concreteness a veteran's work history \
 would get, and never apologize for a short history.
 
@@ -34,6 +37,15 @@ recruiters and screening software search for their own words; never borrow \
 their terminology for anything the candidate lacks. (2) if reviewer \
 concerns are listed, address the most important one head-on in one or two \
 confident sentences — reframe honestly, never apologize, never ignore it."""
+
+def _no_dashes(text: str) -> str:
+    """Belt and braces for the no-em-dash rule: models emit them by habit
+    however the prompt is worded, and one stray dash is the tell that a
+    letter was machine-written. Spaced dashes become a comma; unspaced
+    ones (word—word) become a comma plus space. Hyphens are untouched."""
+    text = re.sub(r"\s*[—–]\s*(?=\w)", ", ", text)
+    return re.sub(r"\s*[—–]\s*", ", ", text)
+
 
 CRITIQUE_SYSTEM = """You are a skeptical hiring manager reviewing a cover \
 letter against the candidate's actual work history, education, and \
@@ -87,12 +99,12 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
         return
 
     # --- draft ---
-    letter_text = generate(
+    letter_text = _no_dashes(generate(
         _draft_prompt(profile, posting, app_data),
         system=DRAFT_SYSTEM,
         max_tokens=1200,
         temperature=0.8,
-    ).strip()
+    ).strip())
 
     # --- critique + one revision ---
     critique = generate_structured(
@@ -102,12 +114,12 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
     )
     version = 1
     if not critique.passed:
-        letter_text = generate(
+        letter_text = _no_dashes(generate(
             _revision_prompt(letter_text, critique),
             system=DRAFT_SYSTEM,
             max_tokens=1200,
             temperature=0.5,
-        ).strip()
+        ).strip())
         critique = generate_structured(
             _critique_prompt(profile, posting, letter_text),
             Critique,
