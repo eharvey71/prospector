@@ -94,7 +94,6 @@ export default function AdminPage() {
   const [jobUrl, setJobUrl] = useState("");
   const [jobUid, setJobUid] = useState("");
   const [addingJob, setAddingJob] = useState(false);
-  const [openUid, setOpenUid] = useState(null);   // user whose matches show
   const [matches, setMatches] = useState({});     // uid -> [{...app, posting}]
 
   async function addJobFor() {
@@ -119,24 +118,26 @@ export default function AdminPage() {
     }
   }
 
-  async function loadMatches(uid) {
-    if (openUid === uid) { setOpenUid(null); return; }
-    setOpenUid(uid);
-    if (matches[uid]) return;
-    try {
-      const snap = await getDocs(query(
-        collection(db, "users", uid, "applications"), limit(60)));
-      const rows = await Promise.all(snap.docs.map(async (d) => {
-        const a = { id: d.id, ...d.data() };
-        const p = await getDoc(doc(db, "jobPostings", a.posting_id || d.id));
-        return { ...a, posting: p.exists() ? p.data() : {} };
+  // Matched jobs per user, loaded with the stats.
+  useEffect(() => {
+    if (!isAdmin || users.length === 0) return;
+    (async () => {
+      const out = {};
+      await Promise.all(users.map(async (u) => {
+        const snap = await getDocs(query(
+          collection(db, "users", u.uid, "applications"),
+          where("state", "==", "matched"), limit(50)));
+        const rows = await Promise.all(snap.docs.map(async (d) => {
+          const a = { id: d.id, ...d.data() };
+          const p = await getDoc(doc(db, "jobPostings", a.posting_id || d.id));
+          return { ...a, posting: p.exists() ? p.data() : {} };
+        }));
+        out[u.uid] = rows.sort(
+          (x, y) => (y.match?.score || 0) - (x.match?.score || 0));
       }));
-      rows.sort((x, y) => (y.match?.score || 0) - (x.match?.score || 0));
-      setMatches((prev) => ({ ...prev, [uid]: rows }));
-    } catch (e) {
-      setStatus(`Couldn't load matches: ${e.message}`);
-    }
-  }
+      setMatches(out);
+    })().catch((e) => setStatus(`Couldn't load matches: ${e.message}`));
+  }, [isAdmin, users]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function save() {
     setSaving(true);
@@ -248,16 +249,13 @@ export default function AdminPage() {
                           + (ago(f.updatedAt) ? ` · last activity ${ago(f.updatedAt)}` : "")
                         : "no matching activity yet — check titles and boards/catalog enrollment"}
                     </p>
-                    <button className="btn-ghost" onClick={() => loadMatches(u.uid)}>
-                      {openUid === u.uid ? "▾ hide their jobs" : "▸ see their jobs"}
-                    </button>
-                    {openUid === u.uid && (
-                      matches[u.uid] ? (
-                        matches[u.uid].length === 0
-                          ? <p className="hint">No applications yet.</p>
+                    <div style={{ marginTop: 8 }}>
+                      {!matches[u.uid] ? <Busy label="Loading matches…" />
+                        : matches[u.uid].length === 0
+                          ? <p className="hint">No matches waiting.</p>
                           : matches[u.uid].map((a) => (
                               <div key={a.id} style={{ display: "flex", gap: 10,
-                                   alignItems: "baseline", padding: "3px 0",
+                                   alignItems: "baseline", padding: "4px 0",
                                    borderTop: `1px solid ${T.border}` }}>
                                 <span className="pill accent">{a.match?.score ?? "–"}</span>
                                 <span style={{ flex: 1, minWidth: 0 }}>
@@ -270,11 +268,9 @@ export default function AdminPage() {
                                     {a.posting?.company}
                                   </span>
                                 </span>
-                                <span className="chip">{a.state}</span>
                               </div>
-                            ))
-                      ) : <Busy label="Loading…" />
-                    )}
+                            ))}
+                    </div>
                   </>
                 )}
               </div>
