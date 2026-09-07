@@ -292,6 +292,15 @@ def add_job_url(req: https_fn.CallableRequest) -> dict:
         raise https_fn.HttpsError(
             https_fn.FunctionsErrorCode.INVALID_ARGUMENT, "url is required")
 
+    # Admins may add a job straight into another user's queue (a parent
+    # dropping a posting into a kid's pipeline). The claim is checked
+    # server-side; a non-admin naming someone else is rejected.
+    target_uid = ((req.data or {}).get("uid") or "").strip() or req.auth.uid
+    if target_uid != req.auth.uid and not (req.auth.token or {}).get("admin"):
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+            "only an admin can add a job for another user")
+
     from matching import match_posting_for_user
     from urljob import create_posting_from_url
     db = _db()
@@ -301,7 +310,7 @@ def add_job_url(req: https_fn.CallableRequest) -> dict:
         raise https_fn.HttpsError(
             https_fn.FunctionsErrorCode.FAILED_PRECONDITION, str(exc))
 
-    match_posting_for_user(db, req.auth.uid, posting_id, posting, force=True)
+    match_posting_for_user(db, target_uid, posting_id, posting, force=True)
     return {"posting_id": posting_id,
             "company": posting.get("company"),
             "title": posting.get("title")}

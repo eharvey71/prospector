@@ -7,10 +7,11 @@
 import { useEffect, useState } from "react";
 import { onAuthStateChanged } from "firebase/auth";
 import {
-  collection, doc, getCountFromServer, getDoc, getDocs, query, setDoc,
+  collection, doc, getCountFromServer, getDoc, getDocs, limit, query, setDoc,
   serverTimestamp, where,
 } from "firebase/firestore";
-import { auth, db } from "../../lib/firebase";
+import { httpsCallable } from "firebase/functions";
+import { auth, db, functions } from "../../lib/firebase";
 import { Busy, T, Nav, SignIn, input, label as labelStyle, btnPrimary } from "../ui";
 
 const FIELDS = [
@@ -89,6 +90,54 @@ export default function AdminPage() {
     })().catch((e) => setStatus(`Stats load failed: ${e.message}`));
   }, [isAdmin, users]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // --- add a job into a user's queue, and browse their results ---
+  const [jobUrl, setJobUrl] = useState("");
+  const [jobUid, setJobUid] = useState("");
+  const [addingJob, setAddingJob] = useState(false);
+  const [openUid, setOpenUid] = useState(null);   // user whose matches show
+  const [matches, setMatches] = useState({});     // uid -> [{...app, posting}]
+
+  async function addJobFor() {
+    const url = jobUrl.trim();
+    if (!url || !jobUid) {
+      setStatus("Pick a user and paste a job URL.");
+      return;
+    }
+    setAddingJob(true);
+    setStatus("");
+    try {
+      const call = httpsCallable(functions, "add_job_url", { timeout: 300_000 });
+      const res = await call({ url, uid: jobUid });
+      const who = users.find((u) => u.uid === jobUid);
+      setStatus(`Added "${res.data.title}" @ ${res.data.company} to `
+        + `${who?.name || "the user"}'s queue.`);
+      setJobUrl("");
+    } catch (e) {
+      setStatus(`Couldn't add it: ${e.message}`);
+    } finally {
+      setAddingJob(false);
+    }
+  }
+
+  async function loadMatches(uid) {
+    if (openUid === uid) { setOpenUid(null); return; }
+    setOpenUid(uid);
+    if (matches[uid]) return;
+    try {
+      const snap = await getDocs(query(
+        collection(db, "users", uid, "applications"), limit(60)));
+      const rows = await Promise.all(snap.docs.map(async (d) => {
+        const a = { id: d.id, ...d.data() };
+        const p = await getDoc(doc(db, "jobPostings", a.posting_id || d.id));
+        return { ...a, posting: p.exists() ? p.data() : {} };
+      }));
+      rows.sort((x, y) => (y.match?.score || 0) - (x.match?.score || 0));
+      setMatches((prev) => ({ ...prev, [uid]: rows }));
+    } catch (e) {
+      setStatus(`Couldn't load matches: ${e.message}`);
+    }
+  }
+
   async function save() {
     setSaving(true);
     setStatus("");
@@ -132,6 +181,35 @@ export default function AdminPage() {
         watchlist. Enrolled users don&apos;t have to configure anything.
       </p>
 
+      <details className="panel tint-amber" open>
+        <summary>Add a job to someone&apos;s queue</summary>
+        <div className="panelbody">
+          <p className="hint" style={{ marginTop: 8 }}>
+            Drops the posting straight into their Matches, score gate
+            bypassed (same as when they paste a URL themselves).
+          </p>
+          <span style={labelStyle}>User</span>
+          <select style={input} value={jobUid}
+                  onChange={(e) => setJobUid(e.target.value)}>
+            <option value="">Choose a user…</option>
+            {users.map((u) => (
+              <option key={u.uid} value={u.uid}>
+                {u.name} {u.email ? `(${u.email})` : ""}
+              </option>
+            ))}
+          </select>
+          <span style={labelStyle}>Job posting URL</span>
+          <input style={input} value={jobUrl} placeholder="https://…"
+                 onChange={(e) => setJobUrl(e.target.value)}
+                 onKeyDown={(e) => e.key === "Enter" && addJobFor()} />
+          <button className="btn-primary" disabled={addingJob} onClick={addJobFor}>
+            {addingJob
+              ? <><span className="spinner sm" />Reading the posting…</>
+              : "Add to their queue"}
+          </button>
+        </div>
+      </details>
+
       <details className="panel tint-green" open>
         <summary>Results by user</summary>
         <div className="panelbody">
@@ -170,6 +248,33 @@ export default function AdminPage() {
                           + (ago(f.updatedAt) ? ` · last activity ${ago(f.updatedAt)}` : "")
                         : "no matching activity yet — check titles and boards/catalog enrollment"}
                     </p>
+                    <button className="btn-ghost" onClick={() => loadMatches(u.uid)}>
+                      {openUid === u.uid ? "▾ hide their jobs" : "▸ see their jobs"}
+                    </button>
+                    {openUid === u.uid && (
+                      matches[u.uid] ? (
+                        matches[u.uid].length === 0
+                          ? <p className="hint">No applications yet.</p>
+                          : matches[u.uid].map((a) => (
+                              <div key={a.id} style={{ display: "flex", gap: 10,
+                                   alignItems: "baseline", padding: "3px 0",
+                                   borderTop: `1px solid ${T.border}` }}>
+                                <span className="pill accent">{a.match?.score ?? "–"}</span>
+                                <span style={{ flex: 1, minWidth: 0 }}>
+                                  {a.posting?.url
+                                    ? <a href={a.posting.url} target="_blank" rel="noreferrer">
+                                        {a.posting?.title || "(untitled)"}
+                                      </a>
+                                    : (a.posting?.title || "(untitled)")}
+                                  {" "}<span style={{ color: T.muted }}>
+                                    {a.posting?.company}
+                                  </span>
+                                </span>
+                                <span className="chip">{a.state}</span>
+                              </div>
+                            ))
+                      ) : <Busy label="Loading…" />
+                    )}
                   </>
                 )}
               </div>
