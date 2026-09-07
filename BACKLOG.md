@@ -31,6 +31,19 @@ Open items, roughly by value. Move a line to Done (bottom) when shipped.
   Taleo/BrassRing) as `ats_platform` on the record; follow one redirect
   hop and check iframe srcs. Converts guesses into an ATS map.
 
+## Extension / application data
+- **Login-gated boards** — autofill sometimes fails where sign-in or
+  account creation comes before the form (Workday tenants, some
+  iCIMS/Taleo). Suspects: the payload's domain check after an auth
+  redirect, the form rendering post-login in a frame the summon path
+  misses, and multi-step wizards where fields appear per step. Likely
+  fixes: re-summon after navigation, per-step fill, payload surviving the
+  auth hop.
+- **References** — Profile section (name, relationship, company, email,
+  phone, 3-4 entries) + extension autofill for the usual patterns
+  (`reference_1_name`, "Reference 1 Email", repeated blocks). Extension
+  only, same posture as self-identification: never the unattended worker.
+
 ## Bigger pieces
 - **Email outcome tracking** — read confirmation/rejection/interview mail
   (Gmail, read-only), advance post-submission states, learn which score
