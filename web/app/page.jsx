@@ -631,22 +631,20 @@ export default function ReviewQueue() {
         {open && expandable && (
           <div className="rowbody" onClick={(e) => e.stopPropagation()}>
             {p?.url && (
-              <div style={{ display: "flex", gap: 12, alignItems: "baseline" }}>
-                {/* Opening a job from the queue ALWAYS hands it to the
-                    extension. This used to be a plain link, so the panel
-                    on the posting still held whichever job was loaded
-                    last — and the handoff existed only in Needs-you. */}
-                <button className="btn-ghost" style={{ padding: 0 }}
-                        onClick={() => openWithAutofill(a)}>
-                  Open &amp; autofill ↗
-                </button>
-                <a href={p.url} target="_blank" rel="noreferrer"
-                   style={{ fontSize: 12.5, color: "var(--muted)" }}>
-                  open without autofill
-                </a>
-              </div>
+              <a href={p.url} target="_blank" rel="noreferrer"
+                 style={{ fontSize: 13 }}>Open posting ↗</a>
             )}
             {children}
+            {/* The extension handoff, on every tab's rows — it used to
+                exist only on Needs-you, so opening a job from anywhere
+                else left the panel holding the previously loaded job. */}
+            {p?.url && (
+              <div className="actions">
+                <button className="btn-primary" onClick={() => openWithAutofill(a)}>
+                  Open &amp; autofill ↗
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
