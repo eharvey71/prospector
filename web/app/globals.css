@@ -266,3 +266,14 @@ details.panel.tint-amber  { border-left: 4px solid var(--warn); }
   color: var(--accent); font-size: 15px; font-weight: 600; margin: 10px 0;
 }
 @keyframes je-spin { to { transform: rotate(360deg); } }
+
+/* --- inline notice: a failure must not whisper in muted gray -------- */
+.notice {
+  border-radius: var(--radius); padding: 10px 14px; font-size: 13.5px;
+  border: 1px solid var(--border); background: var(--panel);
+  border-left-width: 4px;
+}
+.notice.warn { background: #fdf6e8; border-color: #ecd9b2;
+               border-left-color: var(--warn); color: #7a5310; }
+.notice.danger { background: #fdf0f1; border-color: #f2c4c8;
+                 border-left-color: var(--danger); color: #8f2d35; }

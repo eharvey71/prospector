@@ -29,6 +29,10 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     respond?.({ ok: true });
     return false;
   }
+  if (msg.kind === "store_kit") {
+    chrome.storage.local.set({ kit: msg.kit }, () => respond?.({ ok: true }));
+    return true;
+  }
   if (msg.kind === "store") {
     chrome.storage.local.set({ pending: msg.payload }, () => {
       setBadge();
@@ -70,8 +74,13 @@ async function followTab(tabId) {
 async function summonPanel(tab, remember = true) {
   // Returns false when no content script is listening (chrome:// pages,
   // the Web Store, PDF viewer) so callers can fall back.
+  // `followed` tells the panel the loaded job legitimately belongs on
+  // this page even when the domain doesn't match — we followed the tab
+  // here from that job, which is exactly the apply-now hop.
+  const followed = (await followedTabs()).has(tab.id);
   try {
-    await chrome.tabs.sendMessage(tab.id, { kind: "show_panel" }, { frameId: 0 });
+    await chrome.tabs.sendMessage(tab.id, { kind: "show_panel", followed },
+                                  { frameId: 0 });
     if (remember) await followTab(tab.id);
     return true;
   } catch {

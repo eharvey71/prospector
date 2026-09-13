@@ -506,6 +506,18 @@ export default function ReviewQueue() {
     return eeo;
   }
 
+  // Your name, email, phone, LinkedIn and EEO answers are the same on
+  // every application. Keep them in the extension independently of any
+  // one job, so a form you browsed to yourself still autofills instead
+  // of offering some other job's cover letter.
+  useEffect(() => {
+    if (!userDoc) return;
+    window.postMessage({
+      type: "JOB_ENGINE_KIT",
+      kit: { values: standardKit(userDoc), eeo: eeoKit(userDoc) },
+    }, "*");
+  }, [userDoc]); // eslint-disable-line react-hooks/exhaustive-deps
+
   async function openWithAutofill(a) {
     const p = postings[a.posting_id];
     if (!p?.url) return;
@@ -650,8 +662,15 @@ export default function ReviewQueue() {
         <button className="btn-primary" onClick={() => addJob()}>Add job</button>
       </div>
       {addBusy && <Busy label="Reading the posting — this can take up to a minute" />}
-      {!addBusy && addStatus &&
-        <p className="hint" style={{ marginBottom: 10 }}>{addStatus}</p>}
+      {!addBusy && addStatus && (
+        // Failures used to whisper in the same muted gray as successes.
+        /^(Couldn't|The extension)/.test(addStatus)
+          ? <div className="notice warn" style={{ marginBottom: 10 }}>
+              <strong>Couldn&apos;t add that job.</strong>{" "}
+              {addStatus.replace(/^Couldn't add it:\s*/, "")}
+            </div>
+          : <p className="hint" style={{ marginBottom: 10 }}>{addStatus}</p>
+      )}
       {funnel && (
         <p className="funnel"
            title="Where crawled jobs went: seen = evaluated for you; filtered = didn't resemble your titles/skills; scored = rated; matched = cleared your bar">

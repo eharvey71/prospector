@@ -372,7 +372,29 @@
     panel = null;
   }
 
-  function showPanel(pending) {
+  // Drag by the header: the panel is pinned top-right, which is exactly
+  // where some application forms put their own content.
+  function makeDraggable(handle) {
+    handle.addEventListener("mousedown", (e) => {
+      if (e.target.tagName === "BUTTON") return;
+      const rect = panel.getBoundingClientRect();
+      const dx = e.clientX - rect.left, dy = e.clientY - rect.top;
+      const move = (ev) => {
+        panel.style.left = `${Math.max(0, ev.clientX - dx)}px`;
+        panel.style.top = `${Math.max(0, ev.clientY - dy)}px`;
+        panel.style.right = "auto";
+      };
+      const up = () => {
+        document.removeEventListener("mousemove", move);
+        document.removeEventListener("mouseup", up);
+      };
+      document.addEventListener("mousemove", move);
+      document.addEventListener("mouseup", up);
+      e.preventDefault();
+    });
+  }
+
+  function showPanel(pending, kitOnly = false) {
     dismiss();   // a fresh summon always rebuilds
 
     panel = document.createElement("div");
@@ -427,23 +449,38 @@
     const h = document.createElement("div");
     h.innerHTML = `<strong>Prospector autofill</strong>`
       + ` <span style="color:${P.muted};font-size:11px">v`
-      + `${chrome.runtime.getManifest().version}</span>`;
+      + `${chrome.runtime.getManifest().version}</span>`
+      + ` <span style="color:${P.muted};font-size:11px">· drag to move</span>`;
+    h.style.cursor = "move";
+    makeDraggable(h);
     const sub = document.createElement("div");
-    sub.textContent = `${pending.title || ""} @ ${pending.company || ""}`;
+    sub.textContent = kitOnly
+      ? "Your standard details (this isn't the loaded job)"
+      : `${pending.title || ""} @ ${pending.company || ""}`;
     sub.style.cssText = `color:${P.muted};margin:2px 0 10px`;
     panel.append(close, h, sub);
 
-    // Clicked through to a different site than the job's own URL? Say so,
-    // so nobody wonders whether these answers belong to this page.
-    try {
-      const tail = (u) => new URL(u).hostname.split(".").slice(-2).join(".");
-      if (tail(pending.url) !== tail(location.href)) {
-        const note = document.createElement("div");
-        note.textContent = `Answers loaded from ${tail(pending.url)} — check they suit this form.`;
-        note.style.cssText = `color:${P.warn};font-size:11.5px;margin:-6px 0 10px`;
-        panel.append(note);
-      }
-    } catch { /* unparseable URL — skip the note */ }
+    // Whose answers are these? Two different situations, and conflating
+    // them is how a cover letter for one job lands in another's form.
+    if (kitOnly) {
+      const note = document.createElement("div");
+      note.textContent = "This page isn't the job loaded in Prospector, so "
+        + "only your personal details and self-identification are offered — "
+        + "no cover letter, no job-specific answers.";
+      note.style.cssText = `color:${P.warn};font-size:11.5px;margin:-6px 0 10px;`
+        + `border-left:3px solid ${P.warn};padding-left:8px`;
+      panel.append(note);
+    } else {
+      try {
+        const tail = (u) => new URL(u).hostname.split(".").slice(-2).join(".");
+        if (tail(pending.url) !== tail(location.href)) {
+          const note = document.createElement("div");
+          note.textContent = `Answers loaded from ${tail(pending.url)} — check they suit this form.`;
+          note.style.cssText = `color:${P.warn};font-size:11.5px;margin:-6px 0 10px`;
+          panel.append(note);
+        }
+      } catch { /* unparseable URL — skip the note */ }
+    }
 
     const fillBtn = document.createElement("button");
     fillBtn.textContent = "Fill this form";
@@ -569,9 +606,28 @@
   // matched automatically.
   chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     if (msg?.kind !== "show_panel") return;
-    chrome.storage.local.get("pending").then(({ pending }) => {
-      if (pending?.url) showPanel(pending);
-      respond({ shown: !!pending?.url });
+    chrome.storage.local.get(["pending", "kit"]).then(({ pending, kit }) => {
+      // Does the loaded job belong on THIS page? Yes if the domain
+      // matches, or if we followed this tab here from that job (the
+      // apply-now hop). Otherwise the user found this job themselves, and
+      // only the job-independent kit applies — offering another job's
+      // cover letter here is how the wrong letter gets submitted.
+      let sameJob = false;
+      try {
+        const tail = (u) => new URL(u).hostname.split(".").slice(-2).join(".");
+        sameJob = !!pending?.url && tail(pending.url) === tail(location.href);
+      } catch { /* unparseable — treat as different */ }
+      if (pending?.url && (sameJob || msg.followed)) {
+        showPanel(pending);
+        respond({ shown: true });
+      } else if (kit && ((kit.values || []).length || (kit.eeo || []).length)) {
+        showPanel({ values: kit.values || [], eeo: kit.eeo || [],
+                    needs: [], answers: [], letter: "", url: location.href },
+                  true);
+        respond({ shown: true });
+      } else {
+        respond({ shown: false });
+      }
     });
     return true;   // async respond
   });

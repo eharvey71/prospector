@@ -11,6 +11,14 @@ window.addEventListener("message", (ev) => {
     window.postMessage({ type: "JOB_ENGINE_EXTENSION_PRESENT", version: VERSION }, "*");
     return;
   }
+  if (ev.data?.type === "JOB_ENGINE_KIT") {
+    // Job-independent personal answers; kept separately from the pending
+    // job so the panel can fill a form the user found on their own.
+    try {
+      chrome.runtime.sendMessage({ kind: "store_kit", kit: ev.data.kit });
+    } catch { /* extension reloaded — the app will resend on next load */ }
+    return;
+  }
   if (ev.data?.type !== "JOB_ENGINE_AUTOFILL") return;
   // After the extension is reloaded/updated, content scripts in tabs that
   // were already open are orphaned — sendMessage throws. Tell the page
