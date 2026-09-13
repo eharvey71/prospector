@@ -631,8 +631,20 @@ export default function ReviewQueue() {
         {open && expandable && (
           <div className="rowbody" onClick={(e) => e.stopPropagation()}>
             {p?.url && (
-              <a href={p.url} target="_blank" rel="noreferrer"
-                 style={{ fontSize: 13 }}>Open posting ↗</a>
+              <div style={{ display: "flex", gap: 12, alignItems: "baseline" }}>
+                {/* Opening a job from the queue ALWAYS hands it to the
+                    extension. This used to be a plain link, so the panel
+                    on the posting still held whichever job was loaded
+                    last — and the handoff existed only in Needs-you. */}
+                <button className="btn-ghost" style={{ padding: 0 }}
+                        onClick={() => openWithAutofill(a)}>
+                  Open &amp; autofill ↗
+                </button>
+                <a href={p.url} target="_blank" rel="noreferrer"
+                   style={{ fontSize: 12.5, color: "var(--muted)" }}>
+                  open without autofill
+                </a>
+              </div>
             )}
             {children}
           </div>
@@ -736,11 +748,8 @@ export default function ReviewQueue() {
                 <strong style={{ color: "var(--warn)" }}>Why: </strong>
                 {a.submission?.error || "escalated"}
               </p>
-              <div className="actions" style={{ marginTop: 0 }}>
-                <button className="btn-primary" onClick={() => openWithAutofill(a)}>
-                  Open &amp; autofill ↗
-                </button>
-              </div>
+              {/* Open & autofill now lives on every row (see Row), so the
+                  dedicated button here would be a duplicate. */}
               <FillSheet sheet={a.submission?.fill_sheet} />
               <div style={{ margin: "6px 0" }}><ResumeLink path={a.resume_path} /></div>
               <details className="fold">
