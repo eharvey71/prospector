@@ -22,6 +22,13 @@ async function setBadge() {
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
+  if (msg.kind === "follow_me") {
+    // The panel appeared on its own (domain matched the job); remember the
+    // tab so it keeps appearing after the apply-now hop to another domain.
+    if (_sender.tab?.id != null) followTab(_sender.tab.id);
+    respond?.({ ok: true });
+    return false;
+  }
   if (msg.kind === "store") {
     chrome.storage.local.set({ pending: msg.payload }, () => {
       setBadge();
@@ -30,7 +37,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     return true; // async respond
   }
   if (msg.kind === "clear") {
-    chrome.storage.local.remove("pending", () => {
+    chrome.storage.local.remove("pending", async () => {
+      await chrome.storage.session.remove("followTabs");  // stop following
       setBadge();
       respond({ ok: true });
     });
@@ -43,16 +51,50 @@ function addToQueue(url) {
   chrome.tabs.create({ url: `${APP_URL}/?add=${encodeURIComponent(url)}` });
 }
 
-async function summonPanel(tab) {
+// Tabs where the panel has been summoned. An application is a JOURNEY —
+// job board -> "Apply now" -> the ATS on another domain, sometimes a
+// login in between — and the panel's domain check only covers the job's
+// own site. Once summoned in a tab, follow that tab wherever it goes
+// until the job is cleared.
+async function followedTabs() {
+  const { followTabs } = await chrome.storage.session.get("followTabs");
+  return new Set(followTabs || []);
+}
+
+async function followTab(tabId) {
+  const tabs = await followedTabs();
+  tabs.add(tabId);
+  await chrome.storage.session.set({ followTabs: [...tabs] });
+}
+
+async function summonPanel(tab, remember = true) {
   // Returns false when no content script is listening (chrome:// pages,
   // the Web Store, PDF viewer) so callers can fall back.
   try {
     await chrome.tabs.sendMessage(tab.id, { kind: "show_panel" }, { frameId: 0 });
+    if (remember) await followTab(tab.id);
     return true;
   } catch {
     return false;
   }
 }
+
+// Re-show the panel after each real navigation in a followed tab.
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo) => {
+  if (changeInfo.status !== "complete") return;
+  const tabs = await followedTabs();
+  if (!tabs.has(tabId)) return;
+  const { pending } = await chrome.storage.local.get("pending");
+  if (!pending?.url) return;
+  summonPanel({ id: tabId }, false);
+});
+
+chrome.tabs.onRemoved.addListener(async (tabId) => {
+  const tabs = await followedTabs();
+  if (tabs.delete(tabId)) {
+    await chrome.storage.session.set({ followTabs: [...tabs] });
+  }
+});
 
 chrome.action.onClicked.addListener(async (tab) => {
   if (!tab?.url || !/^https?:/.test(tab.url)) return;

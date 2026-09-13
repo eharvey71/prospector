@@ -245,6 +245,23 @@ def _fetch_hint(url: str, exc: Exception) -> str:
     return f"could not fetch that URL: {exc}"
 
 
+BOT_WALL_RX = re.compile(
+    r"confirm you are (not a robot|a human)|are you a human"
+    r"|verify (you are|you're) (human|not a robot)"
+    r"|checking your browser|just a moment"
+    r"|enable javascript( and cookies)? to continue"
+    r"|access denied|request (blocked|unsuccessful)"
+    r"|unusual traffic|\bcaptcha\b|cf-ray|cloudflare ray id", re.I)
+
+# Real postings are long; a wall is short. Both conditions must hold, so a
+# posting that merely mentions "captcha" in its text still goes through.
+BOT_WALL_MAX_CHARS = 1200
+
+
+def _is_bot_wall(text: str) -> bool:
+    return len(text) < BOT_WALL_MAX_CHARS and bool(BOT_WALL_RX.search(text))
+
+
 def _infer_source(url: str) -> AtsType:
     """Hosted Greenhouse/Lever postings get their Tier-1 adapter even when
     found via a career page or pasted by hand."""
@@ -302,6 +319,17 @@ def create_posting_from_url(db, url: str) -> tuple[str, dict]:
     text = _strip_html(resp.text)[:20_000]
     if len(text) < 1500:  # thin page -> the real posting may be in an iframe
         text = _follow_iframes(str(resp.url), resp.text, text)
+    # A bot-check wall answers 200 with a page whose text is "confirm you
+    # are not a robot". Left alone, that text becomes the posting: the
+    # extraction LLM dutifully makes it the TITLE, matching scores the
+    # empty job 5/10 across the board, and the queue shows a job named
+    # "Please click to confirm you are not a robot".
+    if _is_bot_wall(text):
+        raise ValueError(
+            "that site answered with a bot-check page instead of the "
+            "posting, so there's nothing to read. Open it in your browser "
+            "and paste the URL you land on after the check, or use a "
+            "direct link to the employer's application form")
     if len(text) < 200:
         raise ValueError(
             "that page has almost no readable text (likely rendered by "

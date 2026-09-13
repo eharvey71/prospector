@@ -363,6 +363,7 @@
               muted: "#9aa1ad", accent: "#6f9ff3", warn: "#e0b34c" };
   let panel = null;
   let keepAlive = null;
+  let resetForNewPage = () => {};   // rebound by showPanel
 
   function dismiss() {
     clearInterval(keepAlive);
@@ -380,10 +381,19 @@
       border:1px solid ${P.border};border-radius:10px;padding:14px;
       font:13px/1.45 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.5)`;
 
-    // SPA pages re-render aggressively and can sweep the panel out.
+    // SPA pages re-render aggressively and can sweep the panel out. They
+    // also change PAGE without reloading (Workday-style wizards: each
+    // step is a route change), which used to leave the panel showing the
+    // previous step's checkmarks and "Filled 7 fields" — stale advice
+    // about a form that is no longer on screen.
+    let lastUrl = location.href;
     keepAlive = setInterval(() => {
       if (panel && !document.documentElement.contains(panel)) {
         (document.body || document.documentElement).append(panel);
+      }
+      if (panel && location.href !== lastUrl) {
+        lastUrl = location.href;
+        resetForNewPage();
       }
     }, 800);
 
@@ -442,7 +452,20 @@
     const status = document.createElement("div");
     status.style.cssText = `color:${P.muted};margin-bottom:8px`;
 
+    // Called when the page changes under the panel (SPA route change, or
+    // a step in a multi-page application): drop the previous page's
+    // checkmarks so every row is offered again for THIS form.
+    resetForNewPage = () => {
+      status.textContent = "New page — click Fill this form to fill this step.";
+      status.style.color = P.accent;
+      for (const r of rowRegistry) {
+        r.name.textContent = r.name.textContent.replace(/^✓ /, "");
+        r.div.style.opacity = "1";
+      }
+    };
+
     fillBtn.onclick = async () => {
+      status.style.color = P.muted;
       status.textContent = "Filling…";
       const { count, filledKeys } = await fillAll(pending);
       let frameCount = 0;
@@ -535,6 +558,10 @@
     panel.append(clear);
 
     (document.body || document.documentElement).append(panel);
+    // Ask the background to keep showing the panel as this tab navigates:
+    // "Apply now" usually leaves the job's own domain, and the automatic
+    // appearance below can't match a domain it has never heard of.
+    try { chrome.runtime.sendMessage({ kind: "follow_me" }); } catch { /* gone */ }
   }
 
   // Summoned explicitly (toolbar button / right-click): no domain check —
