@@ -75,10 +75,18 @@ class GreenhouseAdapter(SubmissionAdapter):
                     await page.wait_for_load_state("domcontentloaded")
 
                 if await page.locator("#first_name").count() == 0:
-                    return SubmissionOutcome(
-                        success=False, tier=self.tier, escalate=True,
-                        reason="no recognizable Greenhouse form on page",
-                    )
+                    # Modern React board or an embedded frame — not the
+                    # legacy markup this adapter drives. Tier 2 discovers
+                    # any form shape (and looks inside iframes), so
+                    # delegate instead of bouncing the job to a human.
+                    log.info("no legacy Greenhouse form at %s — trying tier 2",
+                             job_url)
+                    await browser.close()
+                    from .agentic import AgenticAdapter
+                    return await AgenticAdapter().submit(
+                        job_url=job_url, profile=profile,
+                        application=application, posting=posting,
+                        uid=uid, app_id=app_id)
 
                 # --- core fields ---
                 first, _, last = name.partition(" ")
@@ -149,8 +157,16 @@ class GreenhouseAdapter(SubmissionAdapter):
                                "Submit button — finish it by hand",
                     )
                 # Point of no return: record the click BEFORE making it, then
-                # undo the record if the click provably didn't happen.
-                await mark_submit_clicked(uid, app_id)
+                # undo the record if the click provably didn't happen. If the
+                # record itself fails, do NOT click — an unrecorded click
+                # could be filed twice. Retrying an unclicked form is safe.
+                if not await mark_submit_clicked(uid, app_id):
+                    return SubmissionOutcome(
+                        success=False, tier=self.tier,
+                        screenshots=shots, fill_sheet=sheet,
+                        reason="could not record the submit-click safety "
+                               "marker; Submit was not clicked — retrying",
+                    )
                 try:
                     await submit_btn.click()
                 except Exception:

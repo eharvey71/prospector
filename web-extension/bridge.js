@@ -1,4 +1,4 @@
-// Runs on the Job Engine web app only. The queue page posts an autofill
+// Runs on the Prospector web app only. The queue page posts an autofill
 // payload via window.postMessage; this forwards it into extension storage
 // and acks so the page knows the extension is installed.
 const VERSION = chrome.runtime.getManifest().version;
@@ -11,10 +11,29 @@ window.addEventListener("message", (ev) => {
     window.postMessage({ type: "JOB_ENGINE_EXTENSION_PRESENT", version: VERSION }, "*");
     return;
   }
+  if (ev.data?.type === "JOB_ENGINE_KIT") {
+    // Job-independent personal answers; kept separately from the pending
+    // job so the panel can fill a form the user found on their own.
+    try {
+      chrome.runtime.sendMessage({ kind: "store_kit", kit: ev.data.kit });
+    } catch { /* extension reloaded — the app will resend on next load */ }
+    return;
+  }
   if (ev.data?.type !== "JOB_ENGINE_AUTOFILL") return;
-  chrome.runtime.sendMessage({ kind: "store", payload: ev.data.payload }, () => {
-    window.postMessage({ type: "JOB_ENGINE_AUTOFILL_ACK" }, "*");
-  });
+  // After the extension is reloaded/updated, content scripts in tabs that
+  // were already open are orphaned — sendMessage throws. Tell the page
+  // loudly instead of dropping the payload on the floor.
+  try {
+    chrome.runtime.sendMessage({ kind: "store", payload: ev.data.payload }, () => {
+      if (chrome.runtime.lastError) {
+        window.postMessage({ type: "JOB_ENGINE_EXTENSION_STALE" }, "*");
+        return;
+      }
+      window.postMessage({ type: "JOB_ENGINE_AUTOFILL_ACK" }, "*");
+    });
+  } catch {
+    window.postMessage({ type: "JOB_ENGINE_EXTENSION_STALE" }, "*");
+  }
 });
 
 window.postMessage({ type: "JOB_ENGINE_EXTENSION_PRESENT", version: VERSION }, "*");

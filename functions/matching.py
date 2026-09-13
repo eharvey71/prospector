@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from llm import generate_structured
 from schemas import (AppState, Application, MatchResult, MatchRubric, RedFlag,
                      StateEvent, UserProfile)
+from state_machine import advance
 
 log = logging.getLogger("matching")
 
@@ -143,6 +144,54 @@ def match_posting_for_user(
         _bump(db, uid, prefiltered=1)
         return
 
+    # A forced add CLAIMS the document before spending a second on
+    # scoring. Writing the posting fires on_posting_written, whose
+    # non-forced fan-out scores the same job for the same user
+    # concurrently; whoever writes first wins, and a below-bar fan-out
+    # landing first put a deliberately-added job straight into Done.
+    # Claiming first makes the race deterministic, and a scoring failure
+    # now leaves the job in Matches (where the user put it) rather than
+    # nowhere. DISCOVERED, not MATCHED: the drafting trigger must not
+    # fire until the score exists.
+    if force:
+        try:
+            app_ref.create({
+                **Application(
+                    posting_id=posting_id, user_added=True,
+                    state=AppState.DISCOVERED,
+                    state_history=[StateEvent(state=AppState.DISCOVERED,
+                                              note="user-added; scoring")],
+                ).model_dump(mode="json"),
+                "updatedAt": datetime.now(timezone.utc),
+            })
+        except AlreadyExists:
+            # The fan-out got there first; it already scored the job, so
+            # reuse that assessment instead of paying for a second one.
+            log.info("uid=%s posting=%s claimed by fan-out; reviving",
+                     uid, posting_id)
+            _revive_if_terminal(app_ref, app_ref.get().to_dict() or {})
+            return
+        try:
+            result = _to_match_result(generate_structured(
+                _match_prompt(profile, posting),
+                MatchAssessment,
+                system=(ENTRY_MATCH_SYSTEM if profile.career_stage == "entry"
+                        else MATCH_SYSTEM),
+                max_tokens=1200,
+            ))
+            note = f"score {result.score} (user-added, gate bypassed)"
+            extra = {"match": result.model_dump(mode="json")}
+        except Exception as exc:
+            # Never strand a job the user explicitly asked for.
+            log.exception("forced scoring failed uid=%s posting=%s", uid, posting_id)
+            note = f"user-added; scoring unavailable ({type(exc).__name__})"
+            extra = {}
+        advance(db, uid, app_id, AppState.DISCOVERED, AppState.MATCHED,
+                note=note, extra_fields=extra)
+        _bump(db, uid, scored=1, matched=1)
+        log.info("uid=%s posting=%s -> matched (%s)", uid, posting_id, note)
+        return
+
     assessment = generate_structured(
         _match_prompt(profile, posting),
         MatchAssessment,
@@ -152,14 +201,13 @@ def match_posting_for_user(
     result = _to_match_result(assessment)
 
     threshold = profile.preferences.min_match_score
-    passed = force or result.score >= threshold
+    passed = result.score >= threshold
     state = AppState.MATCHED if passed else AppState.REJECTED
-    note = f"score {result.score} vs threshold {threshold}" + (
-        " (user-added, gate bypassed)" if force else "")
+    note = f"score {result.score} vs threshold {threshold}"
 
     app = Application(
         posting_id=posting_id,
-        user_added=force,
+        user_added=False,
         state=state,
         state_history=[
             StateEvent(state=AppState.DISCOVERED, note="created by matcher"),
@@ -167,16 +215,19 @@ def match_posting_for_user(
         ],
         match=result,
     )
+    doc = app.model_dump(mode="json")
+    # Every list query orders by a field; Firestore EXCLUDES docs missing
+    # it. Without updatedAt at creation, score-gate rejections never
+    # appeared in the Done tab (transitions set it, creation didn't).
+    doc["updatedAt"] = datetime.now(timezone.utc)
     try:
         # create(), not set(): add_job_url's forced match and the
         # on_posting_written fan-out both score the same posting for the
         # same user concurrently — the slower write must lose, not clobber
         # (a non-forced REJECTED once overwrote a user-added MATCHED here).
-        app_ref.create(app.model_dump(mode="json"))
+        app_ref.create(doc)
     except AlreadyExists:
         log.info("uid=%s posting=%s lost creation race", uid, posting_id)
-        if force:
-            _revive_if_terminal(app_ref, app_ref.get().to_dict() or {})
         return
     _bump(db, uid, scored=1, **({"matched": 1} if passed else {}))
     log.info("uid=%s posting=%s -> %s (%s)", uid, posting_id, state.value, note)
@@ -202,27 +253,134 @@ def _revive_if_terminal(app_ref, current: dict) -> None:
     log.info("revived %s from %s -> matched", app_ref.id, state)
 
 
+_global_wl_cache: dict = {"ts": 0.0, "doc": None}
+
+
+def _global_watchlist(db: firestore.Client) -> dict:
+    """The admin-curated catalog at config/global/watchlist/companies —
+    same shape as a user watchlist, plus enrollment fields (enroll_all /
+    enrolled_uids). Cached 60s: the fan-out calls this once per user per
+    posting, and the doc changes rarely."""
+    import time
+    now = time.monotonic()
+    if now - _global_wl_cache["ts"] > 60:
+        _global_wl_cache["doc"] = (
+            db.collection("config").document("global")
+            .collection("watchlist").document("companies").get().to_dict() or {})
+        _global_wl_cache["ts"] = now
+    return _global_wl_cache["doc"] or {}
+
+
 def _board_watched(db: firestore.Client, uid: str, posting: dict) -> bool:
-    """Is this posting's board on the user's own watchlist? Postings with
-    source=unknown (pasted URLs, career-page crawls) can't be attributed to
-    a board and stay visible to everyone."""
+    """Is this posting's board on the user's own watchlist, or on the
+    global catalog the admin enrolled them in? Global COMPLEMENTS personal
+    lists, never replaces them. Postings with source=unknown (pasted URLs,
+    career-page crawls) can't be attributed to a board and stay visible to
+    everyone."""
     src = posting.get("source", "unknown")
     if src == "unknown":
         return True
-    wl = (db.collection("users").document(uid)
-          .collection("watchlist").document("companies").get().to_dict() or {})
     comp = (posting.get("company") or "").lower()
-    if src == "workday":
-        # watchlist stores full myworkdayjobs URLs; company is the tenant
-        return any(comp and comp in (u or "").lower()
-                   for u in wl.get("workday", []))
-    return comp in {(s or "").lower() for s in wl.get(src, [])}
+
+    lists = [(db.collection("users").document(uid)
+              .collection("watchlist").document("companies").get().to_dict() or {})]
+    g = _global_watchlist(db)
+    if g and (g.get("enroll_all") or uid in (g.get("enrolled_uids") or [])):
+        lists.append(g)
+
+    for wl in lists:
+        if src == "workday":
+            # watchlist stores full myworkdayjobs URLs; company is the tenant
+            if any(comp and comp in (u or "").lower()
+                   for u in wl.get("workday", [])):
+                return True
+        elif comp in {(s or "").lower() for s in wl.get(src, [])}:
+            return True
+    return False
+
+
+US_STATE_NAMES = {
+    "al": "alabama", "ak": "alaska", "az": "arizona", "ar": "arkansas",
+    "ca": "california", "co": "colorado", "ct": "connecticut",
+    "de": "delaware", "fl": "florida", "ga": "georgia", "hi": "hawaii",
+    "id": "idaho", "il": "illinois", "in": "indiana", "ia": "iowa",
+    "ks": "kansas", "ky": "kentucky", "la": "louisiana", "me": "maine",
+    "md": "maryland", "ma": "massachusetts", "mi": "michigan",
+    "mn": "minnesota", "ms": "mississippi", "mo": "missouri",
+    "mt": "montana", "ne": "nebraska", "nv": "nevada",
+    "nh": "new hampshire", "nj": "new jersey", "nm": "new mexico",
+    "ny": "new york", "nc": "north carolina", "nd": "north dakota",
+    "oh": "ohio", "ok": "oklahoma", "or": "oregon", "pa": "pennsylvania",
+    "ri": "rhode island", "sc": "south carolina", "sd": "south dakota",
+    "tn": "tennessee", "tx": "texas", "ut": "utah", "vt": "vermont",
+    "va": "virginia", "wa": "washington", "wv": "west virginia",
+    "wi": "wisconsin", "wy": "wyoming", "dc": "district of columbia",
+}
+
+REMOTE_RX = re.compile(r"\b(fully )?remote\b|\bwork from home\b|\bwfh\b", re.I)
+
+
+def _work_mode(prefs) -> str:
+    """The stored work_mode, or its meaning derived from the legacy
+    checkbox pair for docs saved before it existed."""
+    mode = getattr(prefs, "work_mode", "") or ""
+    if mode in ("local_or_remote", "local_only", "remote_only"):
+        return mode
+    if prefs.remote_only:
+        return "remote_only"
+    return "local_or_remote" if prefs.remote_ok else "local_only"
+
+
+def _passes_location_gate(prefs, posting: dict) -> bool:
+    """One gate for place + work arrangement, enforced pre-LLM.
+    Deliberately generous on place: matching the CITY name in the
+    posting's location field or the first stretch of the description
+    passes — the LLM's logistics rating still grades precision. The gate
+    exists to stop Seattle jobs reaching a Richmond-only user, not to
+    adjudicate suburbs."""
+    loc = (posting.get("location") or "").lower()
+    desc = (posting.get("descriptionText")
+            or posting.get("description_text") or "")[:2500].lower()
+    remote = bool(REMOTE_RX.search(loc) or REMOTE_RX.search(desc))
+    mode = _work_mode(prefs)
+    if mode == "remote_only":
+        return remote
+    if not prefs.locations:
+        return True
+    local = _city_match(prefs.locations, loc, desc)
+    return local or (remote and mode == "local_or_remote")
+
+
+def _city_match(wanted: list[str], loc: str, desc: str) -> bool:
+    for w in wanted:
+        city = w.split(",")[0].strip().lower()
+        if city and re.search(rf"\b{re.escape(city)}\b", loc + " " + desc):
+            # Guard against same-name-different-state (Richmond CA vs VA):
+            # when the user gave a state AND the posting names a different
+            # one in its location field, reject the hit.
+            parts = [p.strip().lower() for p in w.split(",")]
+            want_state = parts[1] if len(parts) > 1 else ""
+            if want_state and loc:
+                want_full = US_STATE_NAMES.get(want_state, want_state)
+                other = [f"{ab}|{nm}" for ab, nm in US_STATE_NAMES.items()
+                         if ab != want_state and nm != want_full]
+                if not re.search(rf"\b({want_state}|{want_full})\b", loc) \
+                        and re.search(rf"\b({'|'.join(other)})\b", loc):
+                    continue
+            return True
+    return False
 
 
 def _prefilter(profile: UserProfile, posting: dict) -> bool:
     """Zero-cost gate before spending LLM tokens."""
     company = (posting.get("company") or "").lower()
     if company in {c.lower() for c in profile.preferences.exclude_companies}:
+        return False
+
+    # Place + work-arrangement gate: jobs outside the wanted places (or
+    # non-remote jobs for a remote-only user) never reach the LLM or the
+    # queue. No locations + a local mode = anywhere, as before.
+    if not _passes_location_gate(profile.preferences, posting):
         return False
 
     # Entry-stage users can't land senior+ roles; don't score them.
@@ -269,9 +427,15 @@ def _match_prompt(profile: UserProfile, posting: dict) -> str:
         for p in profile.projects
     )
     desc = (posting.get("descriptionText") or posting.get("description_text") or "")[:6000]
+    mode_text = {
+        "local_or_remote": "on-site there or fully remote",
+        "local_only": "on-site there only — remote-only roles don't suit",
+        "remote_only": "remote only",
+    }[_work_mode(profile.preferences)]
     return f"""CANDIDATE (career stage: {profile.career_stage})
 Skills: {", ".join(profile.skills)}
-Location: {profile.location or "unspecified"} | Remote only: {profile.preferences.remote_only}
+Location: {profile.location or "unspecified"}
+Wants to work in: {", ".join(profile.preferences.locations) or "anywhere"} ({mode_text})
 Work history:
 {history or "(none)"}
 Education:

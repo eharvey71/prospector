@@ -3,15 +3,15 @@
 // details, letter, and actions. Color is reserved for meaning.
 
 import { useEffect, useRef, useState } from "react";
-import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
+import { onAuthStateChanged } from "firebase/auth";
 import {
   collection, doc, getDoc, limit, onSnapshot, orderBy, query,
   serverTimestamp, updateDoc, where, arrayUnion,
 } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
 import { ref as storageRef, getDownloadURL } from "firebase/storage";
-import { auth, db, functions, googleProvider, storage } from "../lib/firebase";
-import { Nav } from "./ui";
+import { auth, db, functions, storage } from "../lib/firebase";
+import { Busy, Nav, SignIn } from "./ui";
 
 const ANSWER_LABELS = {
   why_company: "Why this company",
@@ -247,7 +247,10 @@ function HealthStrip() {
       <span title="LLM usage today (all users)">
         LLM today: {h.llm?.calls || 0} calls · {Math.round(kTok)}k tokens
         {(h.llm?.errors || 0) > 0 && (
-          <span style={{ color: "var(--warn)" }}> · {h.llm.errors} failed</span>
+          <span style={{ color: "var(--warn)" }}
+                title={h.llm?.lastError || "no error text recorded"}>
+            {" "}· {h.llm.errors} failed — hover for the latest
+          </span>
         )}
       </span>
       {errRecent && (
@@ -280,16 +283,21 @@ function ResumeLink({ path }) {
 // ---------------------------------------------------------------------------
 
 export default function ReviewQueue() {
-  const [user, setUser] = useState(null);
+  // undefined = auth still resolving; null = signed out. Rendering the
+  // sign-in screen for that first tick is what made every navigation
+  // flash the login page.
+  const [user, setUser] = useState(undefined);
   const [apps, setApps] = useState([]);
   const [escalated, setEscalated] = useState([]);
   const [jobUrl, setJobUrl] = useState("");
   const [addStatus, setAddStatus] = useState("");
+  const [addBusy, setAddBusy] = useState(false);
   const [matches, setMatches] = useState([]);
   const [inflight, setInflight] = useState([]);
   const [done, setDone] = useState([]);
   const [postings, setPostings] = useState({});
   const [draftingIds, setDraftingIds] = useState([]);
+  const [skippingId, setSkippingId] = useState(null); // row showing skip reasons
   const [threshold, setThreshold] = useState(70);
   const [tab, setTab] = useState("matches");
   const tabChosen = useRef(false);   // stop auto-selection once the user
@@ -338,10 +346,17 @@ export default function ReviewQueue() {
             orderBy("updatedAt", "desc")),
       (snap) => setInflight(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
       onErr("In flight"));
+    // No orderBy on purpose: Firestore EXCLUDES docs missing the ordered
+    // field, and engine-rejected apps created before the updatedAt fix
+    // don't have it — they'd be invisible forever. Sort client-side.
     const unsub5 = onSnapshot(
-      query(base, where("state", "in", ["submitted", "failed"]),
-            orderBy("updatedAt", "desc"), limit(25)),
-      (snap) => setDone(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
+      query(base, where("state", "in", ["submitted", "failed", "rejected"]),
+            limit(200)),
+      (snap) => {
+        const t = (v) => (v?.seconds ? v.seconds * 1000 : 0);
+        setDone(snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+          .sort((a, b) => t(b.updatedAt) - t(a.updatedAt)));
+      },
       onErr("Done"));
     return () => { unsub1(); unsub2(); unsub3(); unsub4(); unsub5(); };
   }, [user]);
@@ -375,9 +390,12 @@ export default function ReviewQueue() {
   }, [matches, apps, escalated]);
 
   async function addJob(urlArg) {
-    const url = (urlArg ?? jobUrl).trim();
+    // Guard: onClick handlers receive the click EVENT as the first arg —
+    // only a real string counts as a URL override.
+    const url = (typeof urlArg === "string" ? urlArg : jobUrl).trim();
     if (!url) return;
-    setAddStatus("Reading the posting… (up to a minute)");
+    setAddBusy(true);
+    setAddStatus("");
     try {
       const call = httpsCallable(functions, "add_job_url", { timeout: 300_000 });
       const res = await call({ url });
@@ -390,6 +408,8 @@ export default function ReviewQueue() {
       setJobUrl("");
     } catch (e) {
       setAddStatus(`Couldn't add it: ${e.message}`);
+    } finally {
+      setAddBusy(false);
     }
   }
 
@@ -418,12 +438,13 @@ export default function ReviewQueue() {
     }
   }
 
-  async function transition(appId, to, note) {
+  async function transition(appId, to, note, extra = {}) {
     const ref = doc(db, "users", user.uid, "applications", appId);
     await updateDoc(ref, {
       state: to,
       stateHistory: arrayUnion({ state: to, ts: new Date(), note }),
       updatedAt: serverTimestamp(),
+      ...extra,
     });
   }
 
@@ -453,6 +474,7 @@ export default function ReviewQueue() {
     const [first, ...rest] = (u.name || "").split(" ");
     add("First name", first);
     add("Last name", rest.join(" "));
+    add("Full name", u.name);
     add("Email", u.email);
     add("Phone", u.phone);
     add("LinkedIn Profile", u.linkedin);
@@ -466,6 +488,38 @@ export default function ReviewQueue() {
     }
     return kit;
   }
+
+  // Structured self-identification + work-eligibility answers for the
+  // extension's dedicated EEO matcher (label classes + option polarity,
+  // not fuzzy text matching). cat names are the fill.js contract.
+  function eeoKit(u) {
+    if (!u) return [];
+    const eeo = [];
+    const auth = (u.work_auth || "").toLowerCase();
+    if (/citizen|green card|permanent resident|authorized to work/.test(auth)) {
+      eeo.push({ cat: "authorized", field: "Authorized to work in the US?", value: "Yes" });
+      eeo.push({ cat: "sponsorship", field: "Require visa sponsorship?", value: "No" });
+    }
+    const s = u.selfid || {};
+    if (s.gender) eeo.push({ cat: "gender", field: "Gender", value: s.gender });
+    if (s.hispanic_latino) eeo.push({ cat: "hispanic", field: "Hispanic or Latino?", value: s.hispanic_latino });
+    if (s.race) eeo.push({ cat: "race", field: "Race", value: s.race });
+    if (s.veteran_status) eeo.push({ cat: "veteran", field: "Veteran status", value: s.veteran_status });
+    if (s.disability_status) eeo.push({ cat: "disability", field: "Disability status", value: s.disability_status });
+    return eeo;
+  }
+
+  // Your name, email, phone, LinkedIn and EEO answers are the same on
+  // every application. Keep them in the extension independently of any
+  // one job, so a form you browsed to yourself still autofills instead
+  // of offering some other job's cover letter.
+  useEffect(() => {
+    if (!userDoc) return;
+    window.postMessage({
+      type: "JOB_ENGINE_KIT",
+      kit: { values: standardKit(userDoc), eeo: eeoKit(userDoc) },
+    }, "*");
+  }, [userDoc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function openWithAutofill(a) {
     const p = postings[a.posting_id];
@@ -489,6 +543,7 @@ export default function ReviewQueue() {
         ...standardKit(userDoc).filter((e) => !have.has(norm(e.field))),
       ],
       needs: sheet.filter((e) => e.status !== "filled"),
+      eeo: eeoKit(userDoc),
       answers: [
         ...Object.entries(answers)
           .filter(([k, v]) => k !== "extra" && v)
@@ -498,16 +553,24 @@ export default function ReviewQueue() {
       ],
     };
     let acked = false;
+    let stale = false;
     const onAck = (ev) => {
       if (ev.data?.type === "JOB_ENGINE_AUTOFILL_ACK") acked = true;
+      if (ev.data?.type === "JOB_ENGINE_EXTENSION_STALE") stale = true;
     };
     window.addEventListener("message", onAck);
     window.postMessage({ type: "JOB_ENGINE_AUTOFILL", payload }, "*");
     // Give the extension a moment to store the payload, then open the
-    // posting REGARDLESS — the user asked to open a job; a missing
-    // extension is a reason to warn, not to do nothing.
+    // posting — but NOT when the handoff failed: an extension holding a
+    // previous job's answers on the new posting is worse than a warning.
     setTimeout(() => {
       window.removeEventListener("message", onAck);
+      if (stale) {
+        setAddStatus("The extension was updated since this tab loaded, so "
+          + "it couldn't take the answers. RELOAD THIS TAB and click "
+          + "Open & autofill again.");
+        return;
+      }
       window.open(p.url, "_blank");
       if (!acked) {
         setAddStatus("Opened the posting, but the autofill extension isn't "
@@ -517,16 +580,8 @@ export default function ReviewQueue() {
     }, 600);
   }
 
-  if (!user) {
-    return (
-      <main className="container">
-        <h1>Job Engine</h1>
-        <button className="btn-primary" onClick={() => signInWithPopup(auth, googleProvider)}>
-          Sign in with Google
-        </button>
-      </main>
-    );
-  }
+  if (user === undefined) return null;   // wait for auth, don't flash
+  if (!user) return <SignIn />;
 
   // Pipeline order: a job moves left to right through these tabs.
   const TABS = [
@@ -539,9 +594,17 @@ export default function ReviewQueue() {
     { key: "inflight", label: "In flight", count: inflight.length,
       blurb: "Approved applications the engine is submitting right now." },
     { key: "done", label: "Done", count: done.length,
-      blurb: "Finished — submitted or failed. Most recent first." },
+      blurb: "Submitted, failed, or skipped by you. Skips can be brought back." },
   ];
   const activeTab = TABS.find((t) => t.key === tab) || TABS[0];
+
+  // Left-edge stripe color keyed to where the job is in the pipeline.
+  const STRIPE = {
+    matched: "s-accent", drafted: "s-purple", in_review: "s-purple",
+    needs_human: "s-danger", approved: "s-accent", queued: "s-accent",
+    submitting: "s-accent", submitted: "s-ok", failed: "s-danger",
+    rejected: "s-muted",
+  };
 
   // One compact row per job; body renders only when expanded.
   function Row({ a, right, children, expandable = true }) {
@@ -550,7 +613,7 @@ export default function ReviewQueue() {
     const open = openId === a.id;
     const tier = m.score != null ? tierOf(m.score, threshold) : null;
     return (
-      <div className={"row" + (open ? " open" : "")}>
+      <div className={"row " + (STRIPE[a.state] || "s-muted") + (open ? " open" : "")}>
         <div
           className={"rowhead" + (expandable ? "" : " static")}
           onClick={expandable ? () => setOpenId(open ? null : a.id) : undefined}
@@ -572,6 +635,16 @@ export default function ReviewQueue() {
                  style={{ fontSize: 13 }}>Open posting ↗</a>
             )}
             {children}
+            {/* The extension handoff, on every tab's rows — it used to
+                exist only on Needs-you, so opening a job from anywhere
+                else left the panel holding the previously loaded job. */}
+            {p?.url && (
+              <div className="actions">
+                <button className="btn-primary" onClick={() => openWithAutofill(a)}>
+                  Open &amp; autofill ↗
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -600,9 +673,18 @@ export default function ReviewQueue() {
           onChange={e => setJobUrl(e.target.value)}
           onKeyDown={e => e.key === "Enter" && addJob()}
         />
-        <button className="btn-primary" onClick={addJob}>Add job</button>
+        <button className="btn-primary" onClick={() => addJob()}>Add job</button>
       </div>
-      {addStatus && <p className="hint" style={{ marginBottom: 10 }}>{addStatus}</p>}
+      {addBusy && <Busy label="Reading the posting — this can take up to a minute" />}
+      {!addBusy && addStatus && (
+        // Failures used to whisper in the same muted gray as successes.
+        /^(Couldn't|The extension)/.test(addStatus)
+          ? <div className="notice warn" style={{ marginBottom: 10 }}>
+              <strong>Couldn&apos;t add that job.</strong>{" "}
+              {addStatus.replace(/^Couldn't add it:\s*/, "")}
+            </div>
+          : <p className="hint" style={{ marginBottom: 10 }}>{addStatus}</p>
+      )}
       {funnel && (
         <p className="funnel"
            title="Where crawled jobs went: seen = evaluated for you; filtered = didn't resemble your titles/skills; scored = rated; matched = cleared your bar">
@@ -616,7 +698,7 @@ export default function ReviewQueue() {
         {TABS.map((t) => (
           <button key={t.key}
                   onClick={() => { tabChosen.current = true; setTab(t.key); }}
-                  className={"tab" + (t.key === tab ? " active" : "")}>
+                  className={`tab tab-${t.key}` + (t.key === tab ? " active" : "")}>
             {t.label}
             <span className={"n" + (t.count > 0 && t.urgent ? " hot" : "")}>{t.count}</span>
           </button>
@@ -631,6 +713,12 @@ export default function ReviewQueue() {
             <Row key={a.id} a={a}>
               <MatchInsight app={a} threshold={threshold} queue="review" />
               <div style={{ marginTop: 6 }}><ResumeLink path={a.resume_path} /></div>
+              {!a.letter?.text && (
+                <p className="hint" style={{ marginTop: 8 }}>
+                  No letter — this application will be submitted without one.
+                  Type below only if you want to add one.
+                </p>
+              )}
               <textarea className="letter" defaultValue={a.letter?.text || ""}
                         onBlur={(e) => saveLetter(a.id, e.target.value)} />
               <div className="actions">
@@ -658,11 +746,8 @@ export default function ReviewQueue() {
                 <strong style={{ color: "var(--warn)" }}>Why: </strong>
                 {a.submission?.error || "escalated"}
               </p>
-              <div className="actions" style={{ marginTop: 0 }}>
-                <button className="btn-primary" onClick={() => openWithAutofill(a)}>
-                  Open &amp; autofill ↗
-                </button>
-              </div>
+              {/* Open & autofill now lives on every row (see Row), so the
+                  dedicated button here would be a duplicate. */}
               <FillSheet sheet={a.submission?.fill_sheet} />
               <div style={{ margin: "6px 0" }}><ResumeLink path={a.resume_path} /></div>
               <details className="fold">
@@ -705,13 +790,45 @@ export default function ReviewQueue() {
               <div className="actions">
                 <button className="btn-primary" disabled={draftingIds.includes(a.id)}
                         onClick={() => writeLetter(a.id)}>
-                  {draftingIds.includes(a.id) ? "Writing… (about a minute)" : "Write the letter"}
+                  {draftingIds.includes(a.id)
+                    ? <><span className="spinner sm" />Writing — about a minute</>
+                    : "Write the letter"}
                 </button>
                 <button className="btn"
-                        onClick={() => transition(a.id, "rejected", "skipped from matches")}>
+                        onClick={() => transition(a.id, "in_review",
+                          "no letter — sent straight to review")}>
+                  Apply without letter
+                </button>
+                <button className="btn"
+                        onClick={() => setSkippingId(skippingId === a.id ? null : a.id)}>
                   Skip
                 </button>
               </div>
+              {skippingId === a.id && (
+                <div className="actions" style={{ alignItems: "center" }}>
+                  <span className="hint" style={{ margin: 0 }}>Why? (teaches the engine)</span>
+                  {["Wrong location", "Too senior", "Wrong field",
+                    "Salary too low", "Not this company", "Just not interested"]
+                    .map((r) => (
+                      <button key={r} className="btn"
+                              style={{ padding: "4px 10px", fontSize: 12.5 }}
+                              onClick={() => {
+                                setSkippingId(null);
+                                transition(a.id, "rejected", `skipped: ${r}`,
+                                           { rejection_reason: r });
+                              }}>
+                        {r}
+                      </button>
+                    ))}
+                  <button className="btn" style={{ padding: "4px 10px", fontSize: 12.5 }}
+                          onClick={() => {
+                            setSkippingId(null);
+                            transition(a.id, "rejected", "skipped from matches");
+                          }}>
+                    No reason — just skip
+                  </button>
+                </div>
+              )}
             </Row>
           ))}
         </>
@@ -726,7 +843,8 @@ export default function ReviewQueue() {
                    <span className="pill accent">
                      {a.state === "approved" && "waiting to queue"}
                      {a.state === "queued" && "queued"}
-                     {a.state === "submitting" && "submitting…"}
+                     {a.state === "submitting" &&
+                       <><span className="spinner sm" />submitting…</>}
                    </span>
                  } />
           ))}
@@ -741,9 +859,25 @@ export default function ReviewQueue() {
                  right={
                    a.state === "submitted"
                      ? <span className="pill ok">✓ submitted</span>
-                     : <span className="pill danger">✗ failed</span>
+                     : a.state === "rejected"
+                       ? <span className="pill">skipped</span>
+                       : <span className="pill danger">✗ failed</span>
                  }>
-              {a.state === "submitted" ? (
+              {a.state === "rejected" ? (
+                <>
+                  {a.rejection_reason && (
+                    <p className="hint" style={{ marginTop: 8 }}>
+                      Skipped: {a.rejection_reason}
+                    </p>
+                  )}
+                  <div className="actions" style={{ marginTop: 10 }}>
+                    <button className="btn" onClick={() =>
+                      transition(a.id, "matched", "un-skipped from Done")}>
+                      Put it back in Matches
+                    </button>
+                  </div>
+                </>
+              ) : a.state === "submitted" ? (
                 <p className="hint" style={{ marginTop: 10 }}>
                   Submitted{a.submission?.confirmedAt ? ` — ${new Date(
                     a.submission.confirmedAt.seconds

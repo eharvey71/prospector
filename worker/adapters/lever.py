@@ -76,10 +76,17 @@ class LeverAdapter(SubmissionAdapter):
                 await page.goto(apply_url, wait_until="domcontentloaded", timeout=45_000)
 
                 if await page.locator("input[name='name']").count() == 0:
-                    return SubmissionOutcome(
-                        success=False, tier=self.tier, escalate=True,
-                        reason="no recognizable Lever form on page",
-                    )
+                    # Not the classic Lever markup — let Tier 2 discover
+                    # whatever form is actually there before any human is
+                    # bothered.
+                    log.info("no classic Lever form at %s — trying tier 2",
+                             apply_url)
+                    await browser.close()
+                    from .agentic import AgenticAdapter
+                    return await AgenticAdapter().submit(
+                        job_url=job_url, profile=profile,
+                        application=application, posting=posting,
+                        uid=uid, app_id=app_id)
 
                 # --- core fields (Lever uses one full-name input) ---
                 email = profile.get("email") or prof.get("email", "")
@@ -171,8 +178,16 @@ class LeverAdapter(SubmissionAdapter):
                                "Submit button — finish it by hand",
                     )
                 # Point of no return: record the click BEFORE making it, then
-                # undo the record if the click provably didn't happen.
-                await mark_submit_clicked(uid, app_id)
+                # undo the record if the click provably didn't happen. If the
+                # record itself fails, do NOT click — an unrecorded click
+                # could be filed twice. Retrying an unclicked form is safe.
+                if not await mark_submit_clicked(uid, app_id):
+                    return SubmissionOutcome(
+                        success=False, tier=self.tier,
+                        screenshots=shots, fill_sheet=sheet,
+                        reason="could not record the submit-click safety "
+                               "marker; Submit was not clicked — retrying",
+                    )
                 try:
                     await submit_btn.click()
                 except Exception:

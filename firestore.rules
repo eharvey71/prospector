@@ -18,6 +18,11 @@ service cloud.firestore {
       return signedIn() && request.auth.uid == uid;
     }
 
+    // Admin = custom auth claim, set by scripts/set_admin.py (Admin SDK).
+    function isAdmin() {
+      return signedIn() && request.auth.token.admin == true;
+    }
+
     // ------------------------------------------------------------------
     // Global job postings: read-only to clients. The discovery functions
     // write these through the Admin SDK, which bypasses these rules.
@@ -37,8 +42,18 @@ service cloud.firestore {
     // ------------------------------------------------------------------
     // Per-user data
     // ------------------------------------------------------------------
+    // Global board catalog, curated by the admin, complements per-user
+    // watchlists. Lives under a subcollection NAMED "watchlist" so the
+    // crawler's collection_group("watchlist") union picks it up unchanged.
+    match /config/global/watchlist/{docId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
     match /users/{uid} {
-      allow read: if isOwner(uid);
+      // Admin may read (the admin page lists users for enrollment);
+      // writes stay owner-only.
+      allow read: if isOwner(uid) || isAdmin();
       // Profile edits from the client are fine; the engine also writes here.
       allow create, update: if isOwner(uid);
       allow delete: if false;
@@ -47,7 +62,9 @@ service cloud.firestore {
       // supposed to make (approve / reject / edit letter while in review).
       // All other state moves come from the engine via Admin SDK.
       match /applications/{appId} {
-        allow read: if isOwner(uid);
+        // Admin read is for the admin panel's per-user result stats
+        // (aggregation counts); writes remain owner/engine-only.
+        allow read: if isOwner(uid) || isAdmin();
         allow create: if false; // engine-only
         allow delete: if false;
 
@@ -62,6 +79,10 @@ service cloud.firestore {
           // the human-owned transitions.
           return (before == after)
             || (before == 'matched' && after == 'rejected')
+            // Apply without a letter: skip drafting, go straight to review.
+            || (before == 'matched' && after == 'in_review')
+            // Un-skip: bring a rejected job back into the pipeline.
+            || (before == 'rejected' && after == 'matched')
             || (before == 'in_review' && after in ['approved', 'rejected'])
             || (before == 'needs_human' && after in ['submitted', 'rejected'])
             // Human-owned retries out of failed: back to matched re-drafts
@@ -71,9 +92,10 @@ service cloud.firestore {
         }
 
         function onlyEditableFieldsChanged() {
-          // Clients may touch: state, letter, screeningAnswers, reviewNote.
+          // Clients may touch: state, letter, screeningAnswers, reviewNote,
+          // and the skip-reason label captured on rejection.
           return request.resource.data.diff(resource.data).affectedKeys()
-            .hasOnly(['state', 'stateHistory', 'letter', 'screeningAnswers', 'reviewNote', 'updatedAt']);
+            .hasOnly(['state', 'stateHistory', 'letter', 'screeningAnswers', 'reviewNote', 'rejection_reason', 'updatedAt']);
         }
       }
 
@@ -84,7 +106,7 @@ service cloud.firestore {
 
       // Funnel counters the matcher writes (engine-only writes).
       match /stats/{docId} {
-        allow read: if isOwner(uid);
+        allow read: if isOwner(uid) || isAdmin();
         allow write: if false;
       }
 

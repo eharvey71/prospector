@@ -11,6 +11,12 @@
 //     (LinkedIn -> careers page -> the ATS), where no auto-match happens.
 
 (function () {
+  // Never on Prospector's own pages. Following a tab means re-showing the
+  // panel after each navigation, and navigating back to the app is a
+  // navigation like any other — which put the panel on top of Settings.
+  const APP_HOST = /(^|\.)job-engine-c8f9c\.web\.app$|^localhost$/;
+  if (APP_HOST.test(location.hostname)) return;
+
   const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const fieldKey = (s) => norm((s || "").replace(/\(.*?\)/g, ""));
 
@@ -25,7 +31,15 @@
     if (MONEY.test(l) && !MONEY.test(f)) return false;
     if (f === l) return true;
     const ft = f.split(" "), lt = l.split(" ");
-    if (ft.every((t) => lt.includes(t))) return ft.length >= 3 || lt.length <= 6;
+    if (ft.every((t) => lt.includes(t))) {
+      if (ft.length >= 3 || lt.length <= 6) return true;
+      // The field as a contiguous phrase inside a longer question:
+      // "full name" in "welcome please enter your full name". Two-word
+      // minimum so a bare "name" can't match every question containing
+      // it; scattered tokens in a long label stay unmatched.
+      if (ft.length >= 2 && l.includes(f)) return true;
+      return false;
+    }
     return f.length >= 15 && (l.includes(f) || f.includes(l));
   }
 
@@ -41,9 +55,18 @@
     }
     let n = el;
     for (let d = 0; d < 5 && n; d++) {
-      n = n.parentElement;
-      const lbl = n?.querySelector("label, legend, [class*='label']");
+      const lbl = n !== el && n.querySelector("label, legend, [class*='label']");
       if (lbl && lbl.textContent.trim()) return lbl.textContent;
+      // Question text often lives in a plain <p>/<div> right before the
+      // field's container ("Please enter your full name" style forms) —
+      // no label element anywhere.
+      const prev = n.previousElementSibling;
+      if (prev && !prev.querySelector("input, textarea, select, button")
+          && prev.textContent.trim()
+          && prev.textContent.trim().length <= 160) {
+        return prev.textContent;
+      }
+      n = n.parentElement;
     }
     return el.name || el.placeholder || "";
   };
@@ -57,12 +80,257 @@
     el.dispatchEvent(new Event("change", { bubbles: true }));
   };
 
+  // Ranked option matching for ordinary value fields (country, state...).
+  // "First option that starts with the value" picked United States MINOR
+  // OUTLYING ISLANDS for "United States" — it appears earlier in the
+  // list. Exact wins; otherwise the SHORTEST option that begins with the
+  // value, which is the one that merely elaborates it.
+  const COUNTRY_ALIASES = {
+    "united states": ["united states of america", "usa", "us"],
+  };
+  function pickValueOption(optionTexts, value) {
+    const v = norm(value);
+    const alts = [v, ...(COUNTRY_ALIASES[v] || [])];
+    let best = -1, bestRank = 99, bestLen = Infinity;
+    optionTexts.forEach((raw, i) => {
+      const t = norm(raw);
+      if (!t) return;
+      let rank = 99;
+      if (alts.includes(t)) rank = 0;
+      else if (alts.some((a) => t.startsWith(a + " "))) rank = 1;
+      else if (alts.some((a) => a.length >= 4 && t.startsWith(a))) rank = 2;
+      if (rank < bestRank || (rank === bestRank && t.length < bestLen)) {
+        best = i; bestRank = rank; bestLen = t.length;
+      }
+    });
+    return bestRank < 99 ? best : -1;
+  }
+
   const fillables = () => [...document.querySelectorAll("input, textarea")]
     .filter((el) => el.offsetParent !== null
       && !["hidden", "submit", "button", "file", "radio", "checkbox"].includes(el.type)
       && !el.value);
 
-  function fillAll(pending) {
+  // ------------------------------------------------------------------
+  // EEO / self-identification: these questions get a dedicated matcher.
+  // Labels are classified into a category, and the option is chosen by
+  // category-specific rules with yes/no polarity safety — never by fuzzy
+  // text similarity. No confident match -> the question stays blank.
+  // ------------------------------------------------------------------
+  // norm() turns "don't" into "don t" — patterns match that form.
+  const DECLINE_RX = /decline|don t wish|dont wish|do not wish|prefer not|do not want|rather not/;
+  const EEO_LABELS = {
+    authorized: /legally authorized|authorized to work|eligible to work|work authorization/,
+    sponsorship: /sponsor|require.*visa|visa.*status/,
+    veteran: /veteran/,
+    disability: /disab/,
+    hispanic: /hispanic|latino|latinx/,
+    race: /\brace\b|ethnicit/,
+    gender: /\bgender\b/,
+  };
+  const EEO_ORDER = ["authorized", "sponsorship", "veteran", "disability",
+                     "hispanic", "race", "gender"];
+
+  // opts are normalized option texts; returns an index or -1 (leave blank).
+  function pickEEOOption(cat, value, opts, eeoAll) {
+    const v = norm(value);
+    const find = (rx) => opts.findIndex((o) => rx.test(o));
+    if (DECLINE_RX.test(v)) return find(DECLINE_RX);
+    if (cat === "veteran") {
+      // Boards word this field a dozen ways: the full VEVRAA sentences,
+      // terse "Not a protected veteran", or a plain Yes/No. Try the
+      // specific phrasings first, then fall back to yes/no polarity, and
+      // leave the field blank when nothing matches confidently.
+      if (/\bnot\b/.test(v)) {
+        const i = find(/\bam not\b|\bnot a protected\b|\bnot a veteran\b/);
+        if (i >= 0) return i;
+        return opts.findIndex((o) => /^no\b/.test(o) && !DECLINE_RX.test(o));
+      }
+      const i = opts.findIndex((o) => /protected veteran|\bveteran\b/.test(o)
+        && !/\bnot\b/.test(o) && !DECLINE_RX.test(o));
+      if (i >= 0) return i;
+      return opts.findIndex((o) => /^yes\b/.test(o) && !DECLINE_RX.test(o));
+    }
+    if (cat === "authorized" || cat === "sponsorship"
+        || cat === "hispanic" || cat === "disability") {
+      // ^no\b will not match "none of the above"; "No, I do not have a
+      // disability" norms to "no i do not have..." and matches.
+      if (/^yes\b/.test(v)) return find(/^yes\b/);
+      if (/^no\b/.test(v)) return find(/^no\b/);
+      return -1;
+    }
+    if (cat === "gender") {
+      const exact = opts.findIndex((o) => o === v);
+      return exact >= 0 ? exact : opts.findIndex((o) => o.startsWith(v + " "));
+    }
+    if (cat === "race") {
+      // Combined Race/Ethnicity dropdowns list "Hispanic or Latino" as an
+      // option; when the user identified as Hispanic, that wins.
+      const hisp = (eeoAll || []).find((e) => e.cat === "hispanic");
+      if (hisp && /^yes\b/.test(norm(hisp.value))) {
+        const i = find(/hispanic|latino/);
+        if (i >= 0) return i;
+      }
+      const groups = [
+        [/american indian|alaska/, /american indian|alaska/],
+        [/\basian\b/, /\basian\b/],          // \b keeps "caucasian" out
+        [/black|african american/, /black|african american/],
+        [/hawaiian|pacific island/, /hawaiian|pacific island/],
+        [/two or more|multiracial/, /two or more|multiracial/],
+        [/\bwhite\b/, /\bwhite\b|caucasian/],
+      ];
+      for (const [vrx, orx] of groups) if (vrx.test(v)) return find(orx);
+      return -1;
+    }
+    return -1;
+  }
+
+  function eeoControls() {
+    const out = [];
+    for (const sel of document.querySelectorAll("select")) {
+      if (sel.offsetParent === null || sel.selectedIndex > 0) continue;
+      out.push({ kind: "select", el: sel, label: norm(labelFor(sel)),
+                 opts: [...sel.options].map((o) => norm(o.textContent)) });
+    }
+    const groups = new Map();
+    for (const r of document.querySelectorAll("input[type='radio']")) {
+      if (r.offsetParent === null) continue;
+      const key = r.name || "anon";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(r);
+    }
+    for (const radios of groups.values()) {
+      if (radios.some((r) => r.checked)) continue;
+      const fs = radios[0].closest("fieldset, [role='radiogroup'], ul, div");
+      let glabel = fs?.querySelector("legend")?.textContent || "";
+      if (!glabel) {
+        const lbl = fs?.parentElement?.querySelector("label, legend, [class*='label']");
+        if (lbl && !lbl.querySelector("input")) glabel = lbl.textContent;
+      }
+      out.push({
+        kind: "radio", radios,
+        label: norm(glabel || radios[0].name),
+        opts: radios.map((r) =>
+          norm(r.closest("label")?.textContent || labelFor(r) || r.value)),
+      });
+    }
+    return out;
+  }
+
+  function fillEEO(eeo, done = new Set()) {
+    const res = { count: 0, cats: new Set() };
+    if (!eeo || !eeo.length) return res;
+    for (const ctl of eeoControls()) {
+      const cat = EEO_ORDER.find((c) => EEO_LABELS[c].test(ctl.label));
+      if (!cat || done.has(cat)) continue;
+      const entry = eeo.find((e) => e.cat === cat);
+      if (!entry) continue;
+      const i = pickEEOOption(cat, entry.value, ctl.opts, eeo);
+      if (i < 0) continue;
+      if (ctl.kind === "select") {
+        ctl.el.value = ctl.el.options[i].value;
+        ctl.el.dispatchEvent(new Event("change", { bubbles: true }));
+      } else {
+        ctl.radios[i].click();
+      }
+      res.count++;
+      res.cats.add(cat);
+    }
+    return res;
+  }
+
+  // Custom dropdowns (react-select and kin — modern Greenhouse boards
+  // render EEO questions this way): open the listbox with real mouse
+  // events, pick the option, then VERIFY by reading the displayed value
+  // back ([class*=single-value]; the inner input never mirrors it).
+  // Unverified selections are not counted.
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const mouse = (el, type) => el.dispatchEvent(
+    new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+
+  const visibleCombos = () => [...document.querySelectorAll(
+    "[role='combobox'], button[aria-haspopup='listbox']")]
+    .filter((el) => el.offsetParent !== null && !el.closest(".iti"));
+
+  const comboDisplay = (el) => {
+    const holder = el.closest("[class*='select'],[class*='combobox']")
+      || el.parentElement;
+    return (holder?.querySelector("[class*='single-value']")?.textContent
+      || el.value || (el.tagName === "BUTTON" ? el.textContent : "") || "").trim();
+  };
+
+  /** Open a custom dropdown, let `choose(optionTexts)` pick an index, click
+   *  it, and return the displayed value (or "" if nothing was chosen).
+   *  Shared by the EEO pass and ordinary value fields — Workday-style
+   *  forms render country/state/phone-type this way too. */
+  async function driveCombo(el, choose) {
+    if (el.disabled || el.getAttribute("aria-disabled") === "true") return "";
+    if (comboDisplay(el)) return "";        // already answered — never overwrite
+    mouse(el, "mousedown"); mouse(el, "mouseup");
+    if (typeof el.click === "function") el.click();
+    await sleep(400);   // listbox options can render lazily
+    // Greenhouse pages carry ~230 hidden intl-tel-input options; visible
+    // + non-.iti filtering is load-bearing here.
+    const opts = [...document.querySelectorAll("[role='option']")]
+      .filter((o) => o.offsetParent !== null && !o.closest(".iti"));
+    const i = opts.length ? choose(opts.map((o) => norm(o.textContent))) : -1;
+    if (i < 0) {   // nothing safe to pick — close and move on
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      mouse(document.body, "mousedown");
+      return "";
+    }
+    mouse(opts[i], "mousedown"); mouse(opts[i], "mouseup");
+    if (typeof opts[i].click === "function") opts[i].click();
+    await sleep(250);
+    return comboDisplay(el);
+  }
+
+  async function fillEEOCombos(eeo, doneCats) {
+    const res = { count: 0, cats: new Set() };
+    if (!eeo || !eeo.length) return res;
+    for (const el of visibleCombos()) {
+      const cat = EEO_ORDER.find((c) => EEO_LABELS[c].test(norm(labelFor(el))));
+      if (!cat || doneCats.has(cat) || res.cats.has(cat)) continue;
+      const entry = eeo.find((e) => e.cat === cat);
+      if (!entry) continue;
+      const display = await driveCombo(
+        el, (texts) => pickEEOOption(cat, entry.value, texts, eeo));
+      // Verify: would our own picker have chosen what's now displayed?
+      if (norm(display)
+          && pickEEOOption(cat, entry.value, [norm(display)], eeo) === 0) {
+        res.count++;
+        res.cats.add(cat);
+      }
+    }
+    return res;
+  }
+
+  /** Ordinary value fields rendered as custom dropdowns (Country, State,
+   *  and friends on Workday-style forms), which the native <select> pass
+   *  can't see at all. */
+  async function fillValueCombos(values, filledKeys) {
+    let count = 0;
+    for (const el of visibleCombos()) {
+      const label = labelFor(el);
+      if (!norm(label)) continue;
+      const match = values.find(({ field, value }) =>
+        value && !filledKeys.has(fieldKey(field))
+        && !/entered \(full text/.test(value)
+        && labelMatches(field, label));
+      if (!match) continue;
+      const display = await driveCombo(
+        el, (texts) => pickValueOption(texts, match.value));
+      // Verify the same way: the shown value must be one our own picker
+      // would have chosen for this value.
+      if (norm(display) && pickValueOption([display], match.value) === 0) {
+        count++;
+        filledKeys.add(fieldKey(match.field));
+      }
+    }
+    return count;
+  }
+
+  async function fillAll(pending) {
     let count = 0;
     const filledKeys = new Set();
     const values = [...(pending.values || [])];
@@ -75,18 +343,24 @@
       "first name": "#first_name", "last name": "#last_name",
       "email": "#email, input[name='email'], input[type='email']",
       "phone": "#phone, input[name='phone'], input[type='tel']",
-      "full name": "input[name='name']",
-      "linkedin": "input[name*='linkedin' i], input[id*='linkedin' i]",
+      "full name": "input[name='name'], input[autocomplete='name']",
+      "linkedin": "input[name*='linkedin' i], input[id*='linkedin' i], "
+        + "input[placeholder*='linkedin' i], input[aria-label*='linkedin' i]",
       "website": "input[name*='website' i], input[name*='portfolio' i]",
       "location": "input[name='location']",
       "cover letter": "textarea[name*='cover'], #cover_letter_text, textarea[name='comments']",
     };
+    // First VISIBLE, EMPTY match — plain querySelector was grabbing hidden
+    // inputs (ATSes keep e.g. a hidden urls[LinkedIn] field alongside the
+    // styled visible one) and "filling" them invisibly.
+    const firstVisible = (sel) => [...document.querySelectorAll(sel)]
+      .find((e) => e.offsetParent !== null && !e.value) || null;
     for (const { field, value } of values) {
       if (!value || /entered \(full text/.test(value) || field === "Resume") continue;
       const f = fieldKey(field);
       let el = null;
       for (const [key, sel] of Object.entries(direct)) {
-        if (f.includes(key)) { el = document.querySelector(sel); break; }
+        if (f.includes(key)) { el = firstVisible(sel); break; }
       }
       if (!el || el.value) {
         el = fillables().find((cand) => labelMatches(field, labelFor(cand))) || null;
@@ -97,17 +371,37 @@
       for (const sel of document.querySelectorAll("select")) {
         if (sel.offsetParent === null) continue;
         if (!labelMatches(field, labelFor(sel))) continue;
-        const opt = [...sel.options].find((o) =>
-          norm(o.textContent) === norm(value)
-          || norm(o.textContent).startsWith(norm(value)));
-        if (opt) {
-          sel.value = opt.value;
+        const i = pickValueOption([...sel.options].map((o) => o.textContent), value);
+        if (i >= 0) {
+          sel.value = sel.options[i].value;
           sel.dispatchEvent(new Event("change", { bubbles: true }));
           count++; filledKeys.add(f);
         }
         break;
       }
     }
+    // Custom dropdowns for ordinary fields (Country, State) — invisible
+    // to the native <select> pass above.
+    count += await fillValueCombos(values, filledKeys);
+
+    // EEO questions reveal conditionally (answering Hispanic/Latino "No"
+    // makes the race question appear, sometimes after a delay) — so fill
+    // in ROUNDS: re-scan, fill what's new, wait for reveals to render.
+    // Stop only after two consecutive rounds gain nothing, so a slow
+    // reveal gets a second chance instead of ending the loop.
+    const eeoDone = new Set();
+    let emptyRounds = 0;
+    for (let round = 0; round < 5 && emptyRounds < 2; round++) {
+      const native = fillEEO(pending.eeo, eeoDone);
+      for (const c of native.cats) eeoDone.add(c);
+      const combo = await fillEEOCombos(pending.eeo, eeoDone);
+      for (const c of combo.cats) eeoDone.add(c);
+      const gained = native.count + combo.count;
+      count += gained;
+      emptyRounds = gained ? 0 : emptyRounds + 1;
+      await sleep(500);
+    }
+    for (const c of eeoDone) filledKeys.add("eeo " + c);
     return { count, filledKeys };
   }
 
@@ -120,7 +414,7 @@
       try {
         const { pending } = await chrome.storage.local.get("pending");
         if (!pending) return;
-        const { count } = fillAll(pending);
+        const { count } = await fillAll(pending);
         window.top.postMessage({ type: "JOB_ENGINE_FILL_RESULT", count }, "*");
       } catch { /* extension context gone — nothing to do */ }
     });
@@ -134,15 +428,43 @@
               muted: "#9aa1ad", accent: "#6f9ff3", warn: "#e0b34c" };
   let panel = null;
   let keepAlive = null;
+  let resetForNewPage = () => {};   // rebound by showPanel
 
-  function dismiss() {
+  function dismiss({ stopFollowing = false } = {}) {
     clearInterval(keepAlive);
     keepAlive = null;
     panel?.remove();
     panel = null;
+    // Closing the panel is a decision, not a blink: without this the next
+    // navigation in a followed tab summons it straight back.
+    if (stopFollowing) {
+      try { chrome.runtime.sendMessage({ kind: "unfollow" }); } catch { /* gone */ }
+    }
   }
 
-  function showPanel(pending) {
+  // Drag by the header: the panel is pinned top-right, which is exactly
+  // where some application forms put their own content.
+  function makeDraggable(handle) {
+    handle.addEventListener("mousedown", (e) => {
+      if (e.target.tagName === "BUTTON") return;
+      const rect = panel.getBoundingClientRect();
+      const dx = e.clientX - rect.left, dy = e.clientY - rect.top;
+      const move = (ev) => {
+        panel.style.left = `${Math.max(0, ev.clientX - dx)}px`;
+        panel.style.top = `${Math.max(0, ev.clientY - dy)}px`;
+        panel.style.right = "auto";
+      };
+      const up = () => {
+        document.removeEventListener("mousemove", move);
+        document.removeEventListener("mouseup", up);
+      };
+      document.addEventListener("mousemove", move);
+      document.addEventListener("mouseup", up);
+      e.preventDefault();
+    });
+  }
+
+  function showPanel(pending, kitOnly = false) {
     dismiss();   // a fresh summon always rebuilds
 
     panel = document.createElement("div");
@@ -151,21 +473,30 @@
       border:1px solid ${P.border};border-radius:10px;padding:14px;
       font:13px/1.45 system-ui,sans-serif;box-shadow:0 8px 30px rgba(0,0,0,.5)`;
 
-    // SPA pages re-render aggressively and can sweep the panel out.
+    // SPA pages re-render aggressively and can sweep the panel out. They
+    // also change PAGE without reloading (Workday-style wizards: each
+    // step is a route change), which used to leave the panel showing the
+    // previous step's checkmarks and "Filled 7 fields" — stale advice
+    // about a form that is no longer on screen.
+    let lastUrl = location.href;
     keepAlive = setInterval(() => {
       if (panel && !document.documentElement.contains(panel)) {
         (document.body || document.documentElement).append(panel);
       }
+      if (panel && location.href !== lastUrl) {
+        lastUrl = location.href;
+        resetForNewPage();
+      }
     }, 800);
 
     const rowRegistry = [];
-    const row = (label, value) => {
+    const row = (label, value, key) => {
       const div = document.createElement("div");
       div.style.cssText = `margin:6px 0;padding:6px 8px;background:${P.alt};border-radius:6px`;
       const name = document.createElement("div");
       name.textContent = label;
       name.style.cssText = `color:${P.muted};font-size:11px`;
-      rowRegistry.push({ key: fieldKey(label), div, name });
+      rowRegistry.push({ key: key || fieldKey(label), div, name });
       const val = document.createElement("div");
       val.textContent = value.length > 90 ? value.slice(0, 90) + "…" : value;
       const copy = document.createElement("button");
@@ -184,25 +515,42 @@
     const close = document.createElement("button");
     close.textContent = "✕";
     close.style.cssText = `float:right;background:none;border:none;color:${P.muted};cursor:pointer;font-size:14px`;
-    close.onclick = dismiss;
+    close.onclick = () => dismiss({ stopFollowing: true });
     const h = document.createElement("div");
-    h.innerHTML = `<strong>Job Engine autofill</strong>`;
+    h.innerHTML = `<strong>Prospector autofill</strong>`
+      + ` <span style="color:${P.muted};font-size:11px">v`
+      + `${chrome.runtime.getManifest().version}</span>`
+      + ` <span style="color:${P.muted};font-size:11px">· drag to move</span>`;
+    h.style.cursor = "move";
+    makeDraggable(h);
     const sub = document.createElement("div");
-    sub.textContent = `${pending.title || ""} @ ${pending.company || ""}`;
+    sub.textContent = kitOnly
+      ? "Your standard details (this isn't the loaded job)"
+      : `${pending.title || ""} @ ${pending.company || ""}`;
     sub.style.cssText = `color:${P.muted};margin:2px 0 10px`;
     panel.append(close, h, sub);
 
-    // Clicked through to a different site than the job's own URL? Say so,
-    // so nobody wonders whether these answers belong to this page.
-    try {
-      const tail = (u) => new URL(u).hostname.split(".").slice(-2).join(".");
-      if (tail(pending.url) !== tail(location.href)) {
-        const note = document.createElement("div");
-        note.textContent = `Answers loaded from ${tail(pending.url)} — check they suit this form.`;
-        note.style.cssText = `color:${P.warn};font-size:11.5px;margin:-6px 0 10px`;
-        panel.append(note);
-      }
-    } catch { /* unparseable URL — skip the note */ }
+    // Whose answers are these? Two different situations, and conflating
+    // them is how a cover letter for one job lands in another's form.
+    if (kitOnly) {
+      const note = document.createElement("div");
+      note.textContent = "This page isn't the job loaded in Prospector, so "
+        + "only your personal details and self-identification are offered — "
+        + "no cover letter, no job-specific answers.";
+      note.style.cssText = `color:${P.warn};font-size:11.5px;margin:-6px 0 10px;`
+        + `border-left:3px solid ${P.warn};padding-left:8px`;
+      panel.append(note);
+    } else {
+      try {
+        const tail = (u) => new URL(u).hostname.split(".").slice(-2).join(".");
+        if (tail(pending.url) !== tail(location.href)) {
+          const note = document.createElement("div");
+          note.textContent = `Answers loaded from ${tail(pending.url)} — check they suit this form.`;
+          note.style.cssText = `color:${P.warn};font-size:11.5px;margin:-6px 0 10px`;
+          panel.append(note);
+        }
+      } catch { /* unparseable URL — skip the note */ }
+    }
 
     const fillBtn = document.createElement("button");
     fillBtn.textContent = "Fill this form";
@@ -211,8 +559,22 @@
     const status = document.createElement("div");
     status.style.cssText = `color:${P.muted};margin-bottom:8px`;
 
-    fillBtn.onclick = () => {
-      const { count, filledKeys } = fillAll(pending);
+    // Called when the page changes under the panel (SPA route change, or
+    // a step in a multi-page application): drop the previous page's
+    // checkmarks so every row is offered again for THIS form.
+    resetForNewPage = () => {
+      status.textContent = "New page — click Fill this form to fill this step.";
+      status.style.color = P.accent;
+      for (const r of rowRegistry) {
+        r.name.textContent = r.name.textContent.replace(/^✓ /, "");
+        r.div.style.opacity = "1";
+      }
+    };
+
+    fillBtn.onclick = async () => {
+      status.style.color = P.muted;
+      status.textContent = "Filling…";
+      const { count, filledKeys } = await fillAll(pending);
       let frameCount = 0;
       const render = () => {
         const total = count + frameCount;
@@ -231,7 +593,9 @@
         try { f.contentWindow.postMessage({ type: "JOB_ENGINE_FILL" }, "*"); }
         catch { /* cross-origin contentWindow access — ignore */ }
       }
-      setTimeout(() => window.removeEventListener("message", collect), 3000);
+      // Combobox driving is slow by design (open, settle, pick, verify) —
+      // give embedded frames time to finish reporting.
+      setTimeout(() => window.removeEventListener("message", collect), 10000);
       render();
       for (const r of rowRegistry) {
         if (filledKeys.has(r.key) && !r.name.textContent.startsWith("✓")) {
@@ -266,6 +630,13 @@
                          e.suggestion));
       }
     }
+    if ((pending.eeo || []).length) {
+      const t = document.createElement("div");
+      t.textContent = "Self-identification — filled where the form allows:";
+      t.style.cssText = `color:${P.accent};font-weight:600;margin-top:8px`;
+      panel.append(t);
+      for (const e of pending.eeo) panel.append(row(e.field, e.value, "eeo " + e.cat));
+    }
     if (yours.length) {
       const t = document.createElement("div");
       t.textContent = `Only you can answer (${yours.length}):`;
@@ -294,6 +665,10 @@
     panel.append(clear);
 
     (document.body || document.documentElement).append(panel);
+    // Ask the background to keep showing the panel as this tab navigates:
+    // "Apply now" usually leaves the job's own domain, and the automatic
+    // appearance below can't match a domain it has never heard of.
+    try { chrome.runtime.sendMessage({ kind: "follow_me" }); } catch { /* gone */ }
   }
 
   // Summoned explicitly (toolbar button / right-click): no domain check —
@@ -301,9 +676,28 @@
   // matched automatically.
   chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     if (msg?.kind !== "show_panel") return;
-    chrome.storage.local.get("pending").then(({ pending }) => {
-      if (pending?.url) showPanel(pending);
-      respond({ shown: !!pending?.url });
+    chrome.storage.local.get(["pending", "kit"]).then(({ pending, kit }) => {
+      // Does the loaded job belong on THIS page? Yes if the domain
+      // matches, or if we followed this tab here from that job (the
+      // apply-now hop). Otherwise the user found this job themselves, and
+      // only the job-independent kit applies — offering another job's
+      // cover letter here is how the wrong letter gets submitted.
+      let sameJob = false;
+      try {
+        const tail = (u) => new URL(u).hostname.split(".").slice(-2).join(".");
+        sameJob = !!pending?.url && tail(pending.url) === tail(location.href);
+      } catch { /* unparseable — treat as different */ }
+      if (pending?.url && (sameJob || msg.followed)) {
+        showPanel(pending);
+        respond({ shown: true });
+      } else if (kit && ((kit.values || []).length || (kit.eeo || []).length)) {
+        showPanel({ values: kit.values || [], eeo: kit.eeo || [],
+                    needs: [], answers: [], letter: "", url: location.href },
+                  true);
+        respond({ shown: true });
+      } else {
+        respond({ shown: false });
+      }
     });
     return true;   // async respond
   });

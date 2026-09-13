@@ -1,4 +1,4 @@
-# Job Engine
+# Prospector
 
 End-to-end job application pipeline on Firebase + Google Cloud Run:
 discovery → matching → drafting → human review → tiered automated submission.

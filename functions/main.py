@@ -97,6 +97,91 @@ def crawl_boards(event: scheduler_fn.ScheduledEvent) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Daily match digest (email). Delivery is the Trigger Email extension;
+# this only queues documents into the `mail` collection.
+# ---------------------------------------------------------------------------
+
+@https_fn.on_call(timeout_sec=120)
+def send_test_digest(req: https_fn.CallableRequest) -> dict:
+    """Queue the real digest now, from current matches. Doesn't touch the
+    lastSentAt marker, so tomorrow's scheduled digest is unaffected."""
+    if req.auth is None:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.UNAUTHENTICATED, "sign in first")
+    uid = ((req.data or {}).get("uid") or "").strip() or req.auth.uid
+    if uid != req.auth.uid and not (req.auth.token or {}).get("admin"):
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+            "only an admin can send a digest for another user")
+    from notify import send_test_digest as run
+    try:
+        return run(_db(), uid)
+    except ValueError as exc:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.FAILED_PRECONDITION, str(exc))
+
+
+@scheduler_fn.on_schedule(schedule="0 13 * * *", timeout_sec=300)
+def email_match_digests(event: scheduler_fn.ScheduledEvent) -> None:
+    from notify import send_match_digests
+    try:
+        n = send_match_digests(_db())
+        log.info("queued %d match digest(s)", n)
+    except Exception as exc:
+        log.exception("match digest run failed")
+        _health_error("digest", exc)
+
+
+# ---------------------------------------------------------------------------
+# Sweeper: applications stuck in SUBMITTING
+# ---------------------------------------------------------------------------
+
+@scheduler_fn.on_schedule(schedule="every 30 minutes", timeout_sec=120)
+def sweep_stuck_submissions(event: scheduler_fn.ScheduledEvent) -> None:
+    """Escalate applications abandoned mid-submission.
+
+    If the worker container dies (OOM, timeout, redeploy) after QUEUED ->
+    SUBMITTING, the redelivered Cloud Task hits the idempotency gate, gets
+    acked as a duplicate, and the application would sit in SUBMITTING
+    forever with nothing left to touch it. Anything in SUBMITTING for 30+
+    minutes is dead — a live attempt finishes in a few minutes. Always
+    escalates, never retries: the submitClickedAt marker says whether the
+    Submit click happened, and when it has, resubmitting is forbidden."""
+    from datetime import datetime, timedelta, timezone
+    from google.cloud.firestore_v1.base_query import FieldFilter
+
+    db = _db()
+    cutoff = datetime.now(timezone.utc) - timedelta(minutes=30)
+    stuck = (db.collection_group("applications")
+             .where(filter=FieldFilter("state", "==", AppState.SUBMITTING.value))
+             .where(filter=FieldFilter("updatedAt", "<", cutoff))
+             .limit(50).stream())
+    swept = 0
+    for snap in stuck:
+        uid = snap.reference.parent.parent.id
+        data = snap.to_dict() or {}
+        clicked = (data.get("submission") or {}).get("submitClickedAt")
+        if clicked:
+            reason = (f"submission attempt died after clicking Submit "
+                      f"({clicked}) — check your email; do not reapply "
+                      f"unless you're sure it never went through")
+        else:
+            reason = ("submission attempt died before clicking Submit — "
+                      "the form was never filed; approve again to retry")
+        try:
+            if advance(db, uid, snap.id, AppState.SUBMITTING,
+                       AppState.NEEDS_HUMAN, note=f"sweeper: {reason}",
+                       extra_fields={"submission.error": reason}):
+                swept += 1
+                log.warning("swept stuck submission uid=%s app=%s clicked=%s",
+                            uid, snap.id, bool(clicked))
+        except Exception as exc:  # keep sweeping the rest
+            _health_error("sweep", exc)
+    if swept:
+        log.info("sweeper escalated %d stuck submission(s)", swept)
+
+
+# ---------------------------------------------------------------------------
 # Matching (posting written -> score for every user)
 # ---------------------------------------------------------------------------
 
@@ -112,8 +197,15 @@ def on_posting_written(event: firestore_fn.Event) -> None:
         return
 
     # Skip if the doc content didn't meaningfully change (lastSeen-only bumps).
+    # Postings store description_text (model_dump); comparing the camelCase
+    # key alone compared None to None on EVERY update, so re-crawls never
+    # re-ran matching and only brand-new postings ever reached a user.
+    def _desc(d: dict | None) -> str:
+        return ((d or {}).get("description_text")
+                or (d or {}).get("descriptionText") or "")
+
     before = event.data.before.to_dict() if event.data.before else None
-    if before and before.get("descriptionText") == posting.get("descriptionText"):
+    if before and _desc(before) == _desc(posting):
         return
 
     from matching import match_posting_for_user
@@ -158,9 +250,26 @@ def suggest_companies(req: https_fn.CallableRequest) -> dict:
         role, exclude,
         location=profile.get("location") or "",
         remote_only=bool(prefs.get("remote_only")),
+        wanted_locations=prefs.get("locations") or [],
+        work_mode=prefs.get("work_mode") or "local_or_remote",
         titles=prefs.get("titles") or [],
         skills=profile.get("skills") or [],
     )
+
+
+@https_fn.on_call(timeout_sec=60, secrets=["ANTHROPIC_API_KEY"])
+def expand_metro(req: https_fn.CallableRequest) -> dict:
+    """Center + radius -> towns list for the Settings location field."""
+    if req.auth is None:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.UNAUTHENTICATED, "sign in first")
+    center = (req.data or {}).get("center", "").strip()
+    if not center:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.INVALID_ARGUMENT, "center is required")
+    radius = max(5, min(int((req.data or {}).get("radius") or 25), 100))
+    from metro import expand_metro as run
+    return {"towns": run(center, radius)}
 
 
 # ---------------------------------------------------------------------------
@@ -226,6 +335,15 @@ def add_job_url(req: https_fn.CallableRequest) -> dict:
         raise https_fn.HttpsError(
             https_fn.FunctionsErrorCode.INVALID_ARGUMENT, "url is required")
 
+    # Admins may add a job straight into another user's queue (a parent
+    # dropping a posting into a kid's pipeline). The claim is checked
+    # server-side; a non-admin naming someone else is rejected.
+    target_uid = ((req.data or {}).get("uid") or "").strip() or req.auth.uid
+    if target_uid != req.auth.uid and not (req.auth.token or {}).get("admin"):
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+            "only an admin can add a job for another user")
+
     from matching import match_posting_for_user
     from urljob import create_posting_from_url
     db = _db()
@@ -235,7 +353,7 @@ def add_job_url(req: https_fn.CallableRequest) -> dict:
         raise https_fn.HttpsError(
             https_fn.FunctionsErrorCode.FAILED_PRECONDITION, str(exc))
 
-    match_posting_for_user(db, req.auth.uid, posting_id, posting, force=True)
+    match_posting_for_user(db, target_uid, posting_id, posting, force=True)
     return {"posting_id": posting_id,
             "company": posting.get("company"),
             "title": posting.get("title")}

@@ -17,6 +17,14 @@
       ]
     },
     {
+      "collectionGroup": "applications",
+      "queryScope": "COLLECTION_GROUP",
+      "fields": [
+        { "fieldPath": "state", "order": "ASCENDING" },
+        { "fieldPath": "updatedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "jobPostings",
       "queryScope": "COLLECTION",
       "fields": [

@@ -24,7 +24,18 @@ T = TypeVar("T", bound=BaseModel)
 PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic")
 MODEL = os.environ.get("LLM_MODEL", "claude-sonnet-4-6")
 
+# Hard daily ceiling on total tokens (input + output), enforced by
+# generate() against the health/llm_YYYYMMDD accounting doc. 0 disables.
+DAILY_TOKEN_BUDGET = int(os.environ.get("LLM_DAILY_TOKEN_BUDGET", "2000000"))
+
 log = logging.getLogger("llm")
+
+
+class BudgetExceeded(RuntimeError):
+    """Raised instead of calling the provider once today's spend passes
+    DAILY_TOKEN_BUDGET. Every caller already survives a failed generate():
+    matching skips the posting, the crawl isolates the source, the judge
+    returns 'unclear'. Resets at UTC midnight (new accounting doc)."""
 
 _health_db = None  # lazy firestore client, shared across calls
 
@@ -58,6 +69,41 @@ def _record_usage(input_tokens: int, output_tokens: int,
         log.debug("llm usage recording failed", exc_info=True)
 
 
+_budget_cache = {"stamp": 0.0, "over": False}
+
+
+def _over_budget() -> bool:
+    """True once today's recorded spend passes DAILY_TOKEN_BUDGET.
+
+    Firestore read cached for 60s so the check adds one read per minute,
+    not per call. Fails OPEN: if the accounting doc can't be read, the
+    call proceeds — the budget is a tripwire against runaway spend, and
+    must never be the thing that breaks a healthy pipeline."""
+    if DAILY_TOKEN_BUDGET <= 0:
+        return False
+    import time
+    now = time.monotonic()
+    if now - _budget_cache["stamp"] < 60:
+        return _budget_cache["over"]
+    over = False
+    try:
+        from google.cloud import firestore  # noqa: F401
+        global _health_db
+        if _health_db is None:
+            _health_db = firestore.Client()
+        day = datetime.now(timezone.utc).strftime("%Y%m%d")
+        d = _health_db.collection("health").document(f"llm_{day}").get().to_dict() or {}
+        spent = int(d.get("input_tokens", 0)) + int(d.get("output_tokens", 0))
+        over = spent >= DAILY_TOKEN_BUDGET
+        if over:
+            log.warning("LLM daily budget exhausted: %d/%d tokens",
+                        spent, DAILY_TOKEN_BUDGET)
+    except Exception:
+        log.debug("budget check failed; allowing call", exc_info=True)
+    _budget_cache.update(stamp=now, over=over)
+    return over
+
+
 def generate(
     prompt: str,
     *,
@@ -66,6 +112,10 @@ def generate(
     temperature: float = 0.7,
 ) -> str:
     """Single-turn text generation."""
+    if _over_budget():
+        raise BudgetExceeded(
+            f"daily LLM token budget ({DAILY_TOKEN_BUDGET}) exhausted; "
+            f"resets at UTC midnight, or raise LLM_DAILY_TOKEN_BUDGET")
     if PROVIDER == "anthropic":
         fn = _anthropic
     elif PROVIDER == "vertex":
@@ -121,17 +171,30 @@ def _strip_fences(text: str) -> str:
 # Providers
 # ---------------------------------------------------------------------------
 
+_sdk_takes_temperature: Optional[bool] = None
+
+
 def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
                temperature: float) -> tuple[str, int, int]:
     import anthropic
 
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
+    # anthropic 1.x REMOVED the temperature parameter from
+    # Messages.create (an unbounded >=0.40 pin pulled the new major in,
+    # and every call started failing client-side with a TypeError).
+    # Feature-detect once so both SDK generations work.
+    global _sdk_takes_temperature
+    if _sdk_takes_temperature is None:
+        import inspect
+        _sdk_takes_temperature = "temperature" in inspect.signature(
+            type(client.messages).create).parameters
     kwargs: dict[str, Any] = dict(
         model=MODEL,
         max_tokens=max_tokens,
-        temperature=temperature,
         messages=[{"role": "user", "content": prompt}],
     )
+    if _sdk_takes_temperature:
+        kwargs["temperature"] = temperature
     if system:
         kwargs["system"] = system
     resp = client.messages.create(**kwargs)

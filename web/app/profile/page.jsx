@@ -8,11 +8,11 @@
 // submission worker's adapter fetches from.
 
 import { useEffect, useState } from "react";
-import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
+import { onAuthStateChanged } from "firebase/auth";
 import { deleteDoc, doc, getDoc, onSnapshot, setDoc, serverTimestamp } from "firebase/firestore";
 import { ref, uploadBytes, getMetadata } from "firebase/storage";
-import { auth, db, googleProvider, storage } from "../../lib/firebase";
-import { T, Nav, box, btn, btnPrimary, input, label } from "../ui";
+import { auth, db, storage } from "../../lib/firebase";
+import { Busy, T, Nav, SignIn, box, btn, btnPrimary, input, label } from "../ui";
 
 const EMPTY_ROLE = { company: "", title: "", start: "", end: "", bullets: [""] };
 const EMPTY_SAMPLE = { title: "", text: "" };
@@ -20,8 +20,9 @@ const EMPTY_EDU = { school: "", degree: "", year: "", bullets: [""] };
 const EMPTY_PROJECT = { name: "", description: "", tech: "" }; // tech: csv in UI
 
 export default function ProfilePage() {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(undefined);   // undefined = resolving
   const [status, setStatus] = useState("");
+  const [busyLabel, setBusyLabel] = useState("");   // non-empty = spinner on
   const [resumeInfo, setResumeInfo] = useState(null);
   const [extraction, setExtraction] = useState(null);
 
@@ -43,6 +44,9 @@ export default function ProfilePage() {
   // Standard screeners: "" = not set (question escalates), "yes"/"no"
   const [relocation, setRelocation] = useState("");
   const [onsite, setOnsite] = useState("");
+  // Voluntary self-identification: "" = unset (left blank on forms)
+  const [selfid, setSelfid] = useState({});
+  const sid = (k, v) => setSelfid(s => ({ ...s, [k]: v }));
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
@@ -92,6 +96,7 @@ export default function ProfilePage() {
         const tri = (v) => (v === true ? "yes" : v === false ? "no" : "");
         setRelocation(tri(d.screeners?.open_to_relocation));
         setOnsite(tri(d.screeners?.onsite_ok));
+        setSelfid(d.selfid || {});
       } else {
         setEmail(user.email || "");
       }
@@ -107,7 +112,8 @@ export default function ProfilePage() {
   const csv = (s) => s.split(",").map(x => x.trim()).filter(Boolean);
 
   async function save() {
-    setStatus("Saving…");
+    setBusyLabel("Saving…");
+    setStatus("");
     const profile = {
       name,
       email,
@@ -138,11 +144,24 @@ export default function ProfilePage() {
         open_to_relocation: relocation === "" ? null : relocation === "yes",
         onsite_ok: onsite === "" ? null : onsite === "yes",
       },
+      selfid: {
+        gender: selfid.gender || null,
+        hispanic_latino: selfid.hispanic_latino || null,
+        race: selfid.race || null,
+        veteran_status: selfid.veteran_status || null,
+        disability_status: selfid.disability_status || null,
+      },
       updatedAt: serverTimestamp(),
     };
-    await setDoc(doc(db, "users", user.uid), profile, { merge: true });
-    setStatus("Saved ✓");
-    setTimeout(() => setStatus(""), 2500);
+    try {
+      await setDoc(doc(db, "users", user.uid), profile, { merge: true });
+      setStatus("Saved ✓");
+      setTimeout(() => setStatus(""), 2500);
+    } catch (e) {
+      setStatus(`Save failed: ${e.message}`);
+    } finally {
+      setBusyLabel("");
+    }
   }
 
   async function uploadResume(file) {
@@ -151,13 +170,20 @@ export default function ProfilePage() {
       setStatus("Resume must be a PDF");
       return;
     }
-    setStatus("Uploading resume…");
-    await uploadBytes(ref(storage, `users/${user.uid}/resume.pdf`), file, {
-      contentType: "application/pdf",
-    });
-    setResumeInfo(`resume.pdf uploaded ${new Date().toLocaleString()}`);
-    setStatus("Resume uploaded ✓");
-    setTimeout(() => setStatus(""), 2500);
+    setBusyLabel("Uploading resume…");
+    setStatus("");
+    try {
+      await uploadBytes(ref(storage, `users/${user.uid}/resume.pdf`), file, {
+        contentType: "application/pdf",
+      });
+      setResumeInfo(`resume.pdf uploaded ${new Date().toLocaleString()}`);
+      setStatus("Resume uploaded ✓");
+      setTimeout(() => setStatus(""), 2500);
+    } catch (e) {
+      setStatus(`Upload failed: ${e.message}`);
+    } finally {
+      setBusyLabel("");
+    }
   }
 
   async function applyExtraction() {
@@ -192,16 +218,8 @@ export default function ProfilePage() {
   const setProject = (i, patch) =>
     setProjects(p => p.map((x, j) => (j === i ? { ...x, ...patch } : x)));
 
-  if (!user) {
-    return (
-      <main className="container">
-        <h1>Profile</h1>
-        <button style={btnPrimary} onClick={() => signInWithPopup(auth, googleProvider)}>
-          Sign in with Google
-        </button>
-      </main>
-    );
-  }
+  if (user === undefined) return null;
+  if (!user) return <SignIn title="Profile" />;
 
   return (
     <main className="container">
@@ -271,6 +289,59 @@ export default function ProfilePage() {
           <option value="">Not set — ask me each time</option>
           <option value="yes">Yes</option>
           <option value="no">No</option>
+        </select>
+      </div>
+      </details>
+
+      <details className="panel">
+        <summary>Voluntary self-identification (optional)</summary>
+        <div className="panelbody">
+        <p style={{ color: T.muted, fontSize: 13 }}>
+          The demographic questions at the end of most US applications
+          (EEO/OFCCP). Set them once and the browser extension fills them
+          while you watch — the unattended engine never answers these.
+          Anything left unset stays blank on the form for you to answer.
+          Answering (or declining to answer) never affects your application.
+        </p>
+        <span style={label}>Gender</span>
+        <select style={input} value={selfid.gender || ""} onChange={e => sid("gender", e.target.value)}>
+          <option value="">Not set — leave blank on forms</option>
+          <option>Male</option>
+          <option>Female</option>
+          <option>Non-binary</option>
+          <option>I don&apos;t wish to answer</option>
+        </select>
+        <span style={label}>Are you Hispanic or Latino?</span>
+        <select style={input} value={selfid.hispanic_latino || ""} onChange={e => sid("hispanic_latino", e.target.value)}>
+          <option value="">Not set — leave blank on forms</option>
+          <option>Yes</option>
+          <option>No</option>
+          <option>I don&apos;t wish to answer</option>
+        </select>
+        <span style={label}>Race (asked when the answer above is No)</span>
+        <select style={input} value={selfid.race || ""} onChange={e => sid("race", e.target.value)}>
+          <option value="">Not set — leave blank on forms</option>
+          <option>American Indian or Alaska Native</option>
+          <option>Asian</option>
+          <option>Black or African American</option>
+          <option>Native Hawaiian or Other Pacific Islander</option>
+          <option>White</option>
+          <option>Two or More Races</option>
+          <option>I don&apos;t wish to answer</option>
+        </select>
+        <span style={label}>Veteran status</span>
+        <select style={input} value={selfid.veteran_status || ""} onChange={e => sid("veteran_status", e.target.value)}>
+          <option value="">Not set — leave blank on forms</option>
+          <option>I am not a protected veteran</option>
+          <option>I identify as one or more of the classifications of a protected veteran</option>
+          <option>I don&apos;t wish to answer</option>
+        </select>
+        <span style={label}>Disability status</span>
+        <select style={input} value={selfid.disability_status || ""} onChange={e => sid("disability_status", e.target.value)}>
+          <option value="">Not set — leave blank on forms</option>
+          <option>Yes, I have a disability (or previously had one)</option>
+          <option>No, I do not have a disability</option>
+          <option>I don&apos;t wish to answer</option>
         </select>
       </div>
       </details>
@@ -438,10 +509,13 @@ export default function ProfilePage() {
       </details>
 
       <div className="savebar">
-        <button onClick={save} style={{ ...btnPrimary, padding: "10px 24px", fontSize: 16 }}>
+        <button onClick={save} disabled={!!busyLabel}
+                style={{ ...btnPrimary, padding: "10px 24px", fontSize: 16 }}>
           Save profile
         </button>
-        <span style={{ marginLeft: 12 }}>{status}</span>
+        <span style={{ marginLeft: 12 }}>
+          {busyLabel ? <Busy label={busyLabel} /> : status}
+        </span>
       </div>
     </main>
   );

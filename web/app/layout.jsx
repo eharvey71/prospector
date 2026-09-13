@@ -1,6 +1,6 @@
 import "./globals.css";
 
-export const metadata = { title: "Job Engine" };
+export const metadata = { title: "Prospector" };
 
 export default function RootLayout({ children }) {
   return (

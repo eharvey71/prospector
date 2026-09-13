@@ -6,24 +6,71 @@
 // profile fields edited on the other page (and vice versa).
 
 import { useEffect, useState } from "react";
-import { onAuthStateChanged, signInWithPopup } from "firebase/auth";
+import { onAuthStateChanged } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
-import { auth, db, functions, googleProvider } from "../../lib/firebase";
-import { T, Nav, box, btn, btnPrimary, input, label } from "../ui";
+import { auth, db, functions } from "../../lib/firebase";
+import { Busy, T, Nav, SignIn, box, btn, btnPrimary, input, label } from "../ui";
 
 export default function SettingsPage() {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(undefined);   // undefined = resolving
   const [status, setStatus] = useState("");
+  const [saving, setSaving] = useState(false);
 
   const [titles, setTitles] = useState("");           // comma-separated
   const [titleSynonyms, setTitleSynonyms] = useState(""); // auto-generated, editable
-  const [remoteOnly, setRemoteOnly] = useState(false);
+  const [locationsStr, setLocationsStr] = useState("");  // semicolon-separated
+  const [workMode, setWorkMode] = useState("local_or_remote");
+  const [radius, setRadius] = useState("25");
+  const [expanding, setExpanding] = useState(false);
+
+  async function expandMetro() {
+    const center = locationsStr.split(";")[0]?.trim();
+    if (!center) {
+      setStatus("Type a center place first — e.g. Richmond, VA");
+      return;
+    }
+    setExpanding(true);
+    setStatus("");
+    try {
+      const call = httpsCallable(functions, "expand_metro", { timeout: 60_000 });
+      const res = await call({ center, radius: Number(radius) });
+      const cur = locationsStr.split(";").map(s => s.trim()).filter(Boolean);
+      const seen = new Set(cur.map(s => s.toLowerCase()));
+      for (const t of res.data.towns || []) {
+        if (!seen.has(t.toLowerCase())) { seen.add(t.toLowerCase()); cur.push(t); }
+      }
+      setLocationsStr(cur.join("; "));
+      setStatus("Nearby towns added — prune any you don't want, then Save settings.");
+    } catch (e) {
+      setStatus(`Couldn't find nearby towns: ${e.message}`);
+    } finally {
+      setExpanding(false);
+    }
+  }
   const [excludeCompanies, setExcludeCompanies] = useState("");
   const [minScore, setMinScore] = useState(70);
   const [autoDraft, setAutoDraft] = useState(false);
   const [salaryStrategy, setSalaryStrategy] = useState("exact");
   const [tailorResume, setTailorResume] = useState(false);
+  const [emailMatches, setEmailMatches] = useState(false);
+  const [testingDigest, setTestingDigest] = useState(false);
+
+  async function sendTestDigest() {
+    setTestingDigest(true);
+    setStatus("");
+    try {
+      const call = httpsCallable(functions, "send_test_digest", { timeout: 120_000 });
+      const res = await call({});
+      setStatus(`Test digest sent to ${res.data.to} with `
+        + `${res.data.matches} match${res.data.matches === 1 ? "" : "es"} — `
+        + `check your inbox (subject starts with [test]).`);
+    } catch (e) {
+      setStatus(`Couldn't send it: ${e.message}`);
+    } finally {
+      setTestingDigest(false);
+    }
+  }
   const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
   const [leverBoards, setLeverBoards] = useState("");
   const [customPages, setCustomPages] = useState(""); // career page URLs
@@ -50,12 +97,17 @@ export default function SettingsPage() {
         const p = snap.data().preferences || {};
         setTitles((p.titles || []).join(", "));
         setTitleSynonyms((p.title_synonyms || []).join(", "));
-        setRemoteOnly(!!p.remote_only);
+        setLocationsStr((p.locations || []).join("; "));
+        // Legacy docs have only the old checkbox pair — derive the mode.
+        setWorkMode(p.work_mode
+          || (p.remote_only ? "remote_only"
+              : p.remote_ok === false ? "local_only" : "local_or_remote"));
         setExcludeCompanies((p.exclude_companies || []).join(", "));
         setMinScore(p.min_match_score ?? 70);
         setAutoDraft(p.auto_draft ?? false);
         setSalaryStrategy(p.salary_strategy || "exact");
         setTailorResume(p.tailor_resume ?? false);
+        setEmailMatches(p.email_matches ?? false);
       }
       const wl = await getDoc(doc(db, "users", user.uid, "watchlist", "companies"));
       if (wl.exists()) {
@@ -74,17 +126,35 @@ export default function SettingsPage() {
   const csv = (s) => s.split(",").map(x => x.trim()).filter(Boolean);
 
   async function save() {
-    setStatus("Saving…");
+    setSaving(true);
+    setStatus("");
+    try {
+      await doSave();
+      setStatus("Saved ✓");
+      setTimeout(() => setStatus(""), 2500);
+    } catch (e) {
+      setStatus(`Save failed: ${e.message}`);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function doSave() {
     await setDoc(doc(db, "users", user.uid), {
       preferences: {
         titles: csv(titles),
         title_synonyms: csv(titleSynonyms),
-        remote_only: remoteOnly,
+        locations: locationsStr.split(";").map(s => s.trim()).filter(Boolean),
+        work_mode: workMode,
+        // Kept in sync for anything still reading the legacy flags.
+        remote_only: workMode === "remote_only",
+        remote_ok: workMode !== "local_only",
         exclude_companies: csv(excludeCompanies),
         min_match_score: Number(minScore) || 70,
         auto_draft: autoDraft,
         salary_strategy: salaryStrategy,
         tailor_resume: tailorResume,
+        email_matches: emailMatches,
       },
       updatedAt: serverTimestamp(),
     }, { merge: true });
@@ -98,8 +168,6 @@ export default function SettingsPage() {
       workable: csv(workableBoards),
       linkedin: csv(linkedinSearches),
     });
-    setStatus("Saved ✓");
-    setTimeout(() => setStatus(""), 2500);
   }
 
   async function trackCompany(nameArg) {
@@ -161,16 +229,8 @@ export default function SettingsPage() {
     setSuggestions(list => list.filter(x => x.slug !== s.slug));
   }
 
-  if (!user) {
-    return (
-      <main className="container">
-        <h1>Settings</h1>
-        <button className="btn-primary" onClick={() => signInWithPopup(auth, googleProvider)}>
-          Sign in with Google
-        </button>
-      </main>
-    );
-  }
+  if (user === undefined) return null;
+  if (!user) return <SignIn title="Settings" />;
 
   return (
     <main className="container">
@@ -196,12 +256,48 @@ export default function SettingsPage() {
           <textarea style={{ height: 70 }} value={titleSynonyms}
                     onChange={e => setTitleSynonyms(e.target.value)}
                     placeholder="(generated after you save new titles)" />
+          <span className="field-label">
+            Where do you want to work? (City, ST — separate several with
+            semicolons; leave blank for anywhere)
+          </span>
+          <input value={locationsStr} onChange={e => setLocationsStr(e.target.value)}
+                 placeholder="e.g. Richmond, VA" />
+          <p className="hint">
+            Jobs outside these places are filtered out before scoring — they
+            never reach your queue and never cost an LLM call. Matching is
+            by city name, so nearby towns matter — let the button below add
+            them for you.
+          </p>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 8 }}>
+            <select style={{ width: "auto" }} value={radius}
+                    onChange={e => setRadius(e.target.value)}>
+              <option value="10">within 10 miles</option>
+              <option value="25">within 25 miles</option>
+              <option value="50">within 50 miles</option>
+            </select>
+            <button className="btn" disabled={expanding} onClick={expandMetro}>
+              {expanding
+                ? <><span className="spinner sm" />Finding towns…</>
+                : "Add nearby towns"}
+            </button>
+            <span className="hint" style={{ margin: 0 }}>
+              around the first place in your list
+            </span>
+          </div>
+          <span className="field-label">Work arrangement</span>
+          <select value={workMode} onChange={e => setWorkMode(e.target.value)}>
+            <option value="local_or_remote">
+              On-site in my places, or fully remote
+            </option>
+            <option value="local_only">
+              Only in my places — skip remote-only jobs
+            </option>
+            <option value="remote_only">
+              Remote only — wherever the company is
+            </option>
+          </select>
           <span className="field-label">Exclude companies (comma-separated)</span>
           <input value={excludeCompanies} onChange={e => setExcludeCompanies(e.target.value)} />
-          <label style={{ display: "block", marginTop: 12 }}>
-            <input type="checkbox" checked={remoteOnly}
-                   onChange={e => setRemoteOnly(e.target.checked)} /> Remote only
-          </label>
         </div>
       </details>
 
@@ -211,7 +307,9 @@ export default function SettingsPage() {
         <div className="panelbody">
           <p className="hint" style={{ marginTop: 8 }}>
             Everything you Add or Track here is written into step 3&apos;s lists
-            automatically — finish with Save settings to keep it.
+            automatically — finish with Save settings to keep it. Your
+            step-1 places and work arrangement steer suggestions: with
+            locations set, you&apos;ll get employers that actually hire there.
           </p>
           <span className="field-label">Describe the role you want</span>
           <textarea style={{ height: 60 }}
@@ -220,7 +318,9 @@ export default function SettingsPage() {
             onChange={e => setSuggestRole(e.target.value)} />
           <div className="actions">
             <button className="btn-primary" disabled={suggesting} onClick={findCompanies}>
-              {suggesting ? "Searching… (can take a minute)" : "Suggest companies"}
+              {suggesting
+                ? <><span className="spinner sm" />Searching — can take a minute</>
+                : "Suggest companies"}
             </button>
           </div>
           {suggestions.map(s => (
@@ -253,7 +353,7 @@ export default function SettingsPage() {
                   <strong style={{ flex: 1 }}>{name}</strong>
                   <button className="btn" disabled={tracking}
                           onClick={() => trackCompany(name)}>
-                    {tracking ? "…" : "Track"}
+                    {tracking ? <span className="spinner sm" /> : "Track"}
                   </button>
                 </div>
               ))}
@@ -267,7 +367,9 @@ export default function SettingsPage() {
                    onChange={e => setTrackName(e.target.value)}
                    onKeyDown={e => e.key === "Enter" && trackCompany()} />
             <button className="btn-primary" disabled={tracking} onClick={() => trackCompany()}>
-              {tracking ? "Resolving…" : "Track"}
+              {tracking
+                ? <><span className="spinner sm" />Resolving…</>
+                : "Track"}
             </button>
           </div>
           {trackResults.map((r, i) => {
@@ -364,6 +466,23 @@ export default function SettingsPage() {
             (a per-job PDF built from your profile facts — nothing invented.
             Off: your uploaded resume.pdf goes everywhere.)</span>
           </label>
+          <label style={{ display: "block", marginTop: 8 }}>
+            <input type="checkbox" checked={emailMatches}
+                   onChange={e => setEmailMatches(e.target.checked)} /> Email me
+            when new matches are found <span className="hint" style={{ display: "inline" }}>
+            (one digest a day, never one per job — sent to the address on
+            your Profile)</span>
+          </label>
+          <button className="btn" disabled={testingDigest}
+                  style={{ marginTop: 8 }} onClick={sendTestDigest}>
+            {testingDigest
+              ? <><span className="spinner sm" />Sending…</>
+              : "Send me a test digest now"}
+          </button>
+          <p className="hint">
+            Builds the real email from your current matches and sends it
+            immediately. Doesn&apos;t affect tomorrow&apos;s digest.
+          </p>
           <span className="field-label">When a form asks for salary expectations</span>
           <select value={salaryStrategy}
                   onChange={e => setSalaryStrategy(e.target.value)}>
@@ -380,10 +499,13 @@ export default function SettingsPage() {
       </details>
 
       <div className="savebar">
-        <button onClick={save} style={{ ...btnPrimary, padding: "10px 24px", fontSize: 16 }}>
+        <button onClick={save} disabled={saving}
+                style={{ ...btnPrimary, padding: "10px 24px", fontSize: 16 }}>
           Save settings
         </button>
-        <span style={{ marginLeft: 12 }}>{status}</span>
+        <span style={{ marginLeft: 12 }}>
+          {saving ? <Busy label="Saving…" /> : status}
+        </span>
       </div>
     </main>
   );

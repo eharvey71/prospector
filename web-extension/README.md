@@ -1,4 +1,4 @@
-# Job Engine Autofill (Chrome extension)
+# Prospector Autofill (Chrome extension)
 
 Fills job application forms **in your own browser** with the answers the
 engine prepared. You watch it happen, finish the human-only questions, and
@@ -46,7 +46,7 @@ It does whichever of the two makes sense:
 | No job loaded | Sends this page to your queue |
 
 Either action is always available explicitly by **right-clicking the page**:
-*Fill this form with Job Engine* / *Add this job to Job Engine*. Clear the
+*Fill this form with Prospector* / *Add this job to Prospector*. Clear the
 loaded job with the panel's "Done with this job" button when you're finished
 — the dot disappears and the button goes back to adding jobs.
 

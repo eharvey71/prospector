@@ -41,7 +41,10 @@ ENGINE_TRANSITIONS: dict[AppState, set[AppState]] = {
     AppState.DRAFTED: {AppState.IN_REVIEW},
     AppState.APPROVED: {AppState.QUEUED},
     AppState.QUEUED: {AppState.SUBMITTING},
-    AppState.SUBMITTING: {AppState.SUBMITTED, AppState.FAILED, AppState.NEEDS_HUMAN},
+    # QUEUED here is the retry rollback: the worker returns a retryable
+    # failure and re-arms the idempotency gate for the redelivered task.
+    AppState.SUBMITTING: {AppState.SUBMITTED, AppState.FAILED,
+                          AppState.NEEDS_HUMAN, AppState.QUEUED},
 }
 
 
@@ -114,7 +117,18 @@ class Preferences(BaseModel):
     # current synonyms were built from (the trigger's loop guard).
     title_synonyms: list[str] = Field(default_factory=list)
     title_synonyms_source: list[str] = Field(default_factory=list)
+    # Geographic narrowing: ["Richmond, VA", ...]. Empty = anywhere.
+    # Enforced in the matcher's prefilter, BEFORE any LLM spend.
+    locations: list[str] = Field(default_factory=list)
+    # One work-arrangement control (replaces the remote_only/remote_ok
+    # checkbox pair, which contradicted each other):
+    #   local_or_remote  jobs in my places, plus fully-remote jobs
+    #   local_only       only jobs in my places; remote-only postings skip
+    #   remote_only      only remote postings, wherever the company is
+    work_mode: str = "local_or_remote"
+    # Legacy flags, still read for docs saved before work_mode existed.
     remote_only: bool = False
+    remote_ok: bool = True
     exclude_companies: list[str] = Field(default_factory=list)
     min_match_score: int = 70       # 0-100 gate before drafting
     auto_draft: bool = False        # True: every match immediately gets a
@@ -129,6 +143,21 @@ class Preferences(BaseModel):
     # reworded against the posting (identity fields verbatim). False: the
     # uploaded resume.pdf is attached everywhere.
     tailor_resume: bool = False
+    # Once-a-day email digest of new matches (never per-match: a crawl can
+    # surface a dozen at once). Delivered by the Trigger Email extension.
+    email_matches: bool = False
+
+
+class SelfIdentification(BaseModel):
+    """Voluntary EEO self-identification, stored as the standard wordings
+    the user picked in Profile. Filled ONLY by the browser extension while
+    the human watches and reviews — the unattended worker never answers
+    demographics. None = unset: the question is left blank for the user."""
+    gender: Optional[str] = None
+    hispanic_latino: Optional[str] = None
+    race: Optional[str] = None
+    veteran_status: Optional[str] = None
+    disability_status: Optional[str] = None
 
 
 class UserProfile(BaseModel):
@@ -149,6 +178,7 @@ class UserProfile(BaseModel):
     projects: list[ProjectItem] = Field(default_factory=list)
     writing_samples: list[WritingSample] = Field(default_factory=list)
     screeners: ScreenerFacts = Field(default_factory=ScreenerFacts)
+    selfid: SelfIdentification = Field(default_factory=SelfIdentification)
     preferences: Preferences = Field(default_factory=Preferences)
 
 

@@ -79,6 +79,8 @@ def _slug_variants(name: str) -> list[str]:
 
 def suggest_companies(role_description: str, exclude: set[str],
                       location: str = "", remote_only: bool = False,
+                      wanted_locations: list[str] | None = None,
+                      work_mode: str = "local_or_remote",
                       titles: list[str] | None = None,
                       skills: list[str] | None = None) -> dict:
     """Returns {"companies": verified, "unverified": [names]}.
@@ -98,8 +100,23 @@ def suggest_companies(role_description: str, exclude: set[str],
         situation += f"\n  skills: {', '.join(skills[:12])}"
     if location:
         situation += f"\nCandidate location: {location}"
-    if remote_only:
+    places = ", ".join(wanted_locations or [])
+    if remote_only or work_mode == "remote_only":
         situation += "\nRemote roles only: prefer remote-friendly organizations."
+    elif places:
+        # Named places make geography a REQUIREMENT, not a nudge — this is
+        # how a new grad in Richmond gets CoStar and VCU Health instead of
+        # famous national brands with no local hiring.
+        situation += (
+            f"\nGEOGRAPHY IS A HARD REQUIREMENT: the seeker works in "
+            f"{places}. Suggest organizations that genuinely hire there — "
+            "headquartered there, or major local employers (health systems, "
+            "universities, banks, utilities, insurers, school systems, "
+            "state/local government and contractors), or national employers "
+            "with a substantial office there. Prefer the distinctly local "
+            "over famous names with no local presence."
+            + ("\nFully-remote-friendly organizations also qualify."
+               if work_mode == "local_or_remote" else ""))
     elif location:
         situation += ("\nPrefer organizations with a presence near the "
                       "candidate or strong remote cultures.")
