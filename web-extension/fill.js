@@ -11,6 +11,12 @@
 //     (LinkedIn -> careers page -> the ATS), where no auto-match happens.
 
 (function () {
+  // Never on Prospector's own pages. Following a tab means re-showing the
+  // panel after each navigation, and navigating back to the app is a
+  // navigation like any other — which put the panel on top of Settings.
+  const APP_HOST = /(^|\.)job-engine-c8f9c\.web\.app$|^localhost$/;
+  if (APP_HOST.test(location.hostname)) return;
+
   const norm = (s) => (s || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
   const fieldKey = (s) => norm((s || "").replace(/\(.*?\)/g, ""));
 
@@ -424,11 +430,16 @@
   let keepAlive = null;
   let resetForNewPage = () => {};   // rebound by showPanel
 
-  function dismiss() {
+  function dismiss({ stopFollowing = false } = {}) {
     clearInterval(keepAlive);
     keepAlive = null;
     panel?.remove();
     panel = null;
+    // Closing the panel is a decision, not a blink: without this the next
+    // navigation in a followed tab summons it straight back.
+    if (stopFollowing) {
+      try { chrome.runtime.sendMessage({ kind: "unfollow" }); } catch { /* gone */ }
+    }
   }
 
   // Drag by the header: the panel is pinned top-right, which is exactly
@@ -504,7 +515,7 @@
     const close = document.createElement("button");
     close.textContent = "✕";
     close.style.cssText = `float:right;background:none;border:none;color:${P.muted};cursor:pointer;font-size:14px`;
-    close.onclick = dismiss;
+    close.onclick = () => dismiss({ stopFollowing: true });
     const h = document.createElement("div");
     h.innerHTML = `<strong>Prospector autofill</strong>`
       + ` <span style="color:${P.muted};font-size:11px">v`

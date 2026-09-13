@@ -29,6 +29,18 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
     respond?.({ ok: true });
     return false;
   }
+  if (msg.kind === "unfollow") {
+    // The user closed the panel in this tab: stop re-showing it here.
+    if (_sender.tab?.id != null) {
+      followedTabs().then((tabs) => {
+        if (tabs.delete(_sender.tab.id)) {
+          chrome.storage.session.set({ followTabs: [...tabs] });
+        }
+      });
+    }
+    respond?.({ ok: true });
+    return false;
+  }
   if (msg.kind === "store_kit") {
     chrome.storage.local.set({ kit: msg.kit }, () => respond?.({ ok: true }));
     return true;
