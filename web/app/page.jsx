@@ -351,7 +351,7 @@ export default function ReviewQueue() {
     // don't have it — they'd be invisible forever. Sort client-side.
     const unsub5 = onSnapshot(
       query(base, where("state", "in", ["submitted", "failed", "rejected"]),
-            limit(50)),
+            limit(200)),
       (snap) => {
         const t = (v) => (v?.seconds ? v.seconds * 1000 : 0);
         setDone(snap.docs.map((d) => ({ id: d.id, ...d.data() }))
