@@ -283,7 +283,10 @@ function ResumeLink({ path }) {
 // ---------------------------------------------------------------------------
 
 export default function ReviewQueue() {
-  const [user, setUser] = useState(null);
+  // undefined = auth still resolving; null = signed out. Rendering the
+  // sign-in screen for that first tick is what made every navigation
+  // flash the login page.
+  const [user, setUser] = useState(undefined);
   const [apps, setApps] = useState([]);
   const [escalated, setEscalated] = useState([]);
   const [jobUrl, setJobUrl] = useState("");
@@ -577,6 +580,7 @@ export default function ReviewQueue() {
     }, 600);
   }
 
+  if (user === undefined) return null;   // wait for auth, don't flash
   if (!user) return <SignIn />;
 
   // Pipeline order: a job moves left to right through these tabs.

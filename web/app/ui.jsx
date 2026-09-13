@@ -1,6 +1,7 @@
 // Shared theme constants (for the pages still using inline styles) + nav.
 "use client";
 
+import Link from "next/link";
 import { useEffect, useState } from "react";
 import {
   isSignInWithEmailLink, onAuthStateChanged, sendSignInLinkToEmail,
@@ -146,11 +147,14 @@ export function Nav({ active }) {
   return (
     <nav className="nav">
       <span className="brand">Prospector</span>
+      {/* Link, not <a>: a plain href reloads the whole app on every tab,
+          which re-runs Firebase auth from scratch and flashes the sign-in
+          screen between pages. */}
       {pages.map((p) => (
-        <a key={p.href} href={p.href}
-           className={p.href === active ? "active" : undefined}>
+        <Link key={p.href} href={p.href}
+              className={p.href === active ? "active" : undefined}>
           {p.title}
-        </a>
+        </Link>
       ))}
       <span className="spacer" />
       {email && <span className="navmail">{email}</span>}

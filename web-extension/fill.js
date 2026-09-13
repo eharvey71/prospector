@@ -74,6 +74,32 @@
     el.dispatchEvent(new Event("change", { bubbles: true }));
   };
 
+  // Ranked option matching for ordinary value fields (country, state...).
+  // "First option that starts with the value" picked United States MINOR
+  // OUTLYING ISLANDS for "United States" — it appears earlier in the
+  // list. Exact wins; otherwise the SHORTEST option that begins with the
+  // value, which is the one that merely elaborates it.
+  const COUNTRY_ALIASES = {
+    "united states": ["united states of america", "usa", "us"],
+  };
+  function pickValueOption(optionTexts, value) {
+    const v = norm(value);
+    const alts = [v, ...(COUNTRY_ALIASES[v] || [])];
+    let best = -1, bestRank = 99, bestLen = Infinity;
+    optionTexts.forEach((raw, i) => {
+      const t = norm(raw);
+      if (!t) return;
+      let rank = 99;
+      if (alts.includes(t)) rank = 0;
+      else if (alts.some((a) => t.startsWith(a + " "))) rank = 1;
+      else if (alts.some((a) => a.length >= 4 && t.startsWith(a))) rank = 2;
+      if (rank < bestRank || (rank === bestRank && t.length < bestLen)) {
+        best = i; bestRank = rank; bestLen = t.length;
+      }
+    });
+    return bestRank < 99 ? best : -1;
+  }
+
   const fillables = () => [...document.querySelectorAll("input, textarea")]
     .filter((el) => el.offsetParent !== null
       && !["hidden", "submit", "button", "file", "radio", "checkbox"].includes(el.type)
@@ -216,47 +242,53 @@
   const mouse = (el, type) => el.dispatchEvent(
     new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
 
+  const visibleCombos = () => [...document.querySelectorAll(
+    "[role='combobox'], button[aria-haspopup='listbox']")]
+    .filter((el) => el.offsetParent !== null && !el.closest(".iti"));
+
+  const comboDisplay = (el) => {
+    const holder = el.closest("[class*='select'],[class*='combobox']")
+      || el.parentElement;
+    return (holder?.querySelector("[class*='single-value']")?.textContent
+      || el.value || (el.tagName === "BUTTON" ? el.textContent : "") || "").trim();
+  };
+
+  /** Open a custom dropdown, let `choose(optionTexts)` pick an index, click
+   *  it, and return the displayed value (or "" if nothing was chosen).
+   *  Shared by the EEO pass and ordinary value fields — Workday-style
+   *  forms render country/state/phone-type this way too. */
+  async function driveCombo(el, choose) {
+    if (el.disabled || el.getAttribute("aria-disabled") === "true") return "";
+    if (comboDisplay(el)) return "";        // already answered — never overwrite
+    mouse(el, "mousedown"); mouse(el, "mouseup");
+    if (typeof el.click === "function") el.click();
+    await sleep(400);   // listbox options can render lazily
+    // Greenhouse pages carry ~230 hidden intl-tel-input options; visible
+    // + non-.iti filtering is load-bearing here.
+    const opts = [...document.querySelectorAll("[role='option']")]
+      .filter((o) => o.offsetParent !== null && !o.closest(".iti"));
+    const i = opts.length ? choose(opts.map((o) => norm(o.textContent))) : -1;
+    if (i < 0) {   // nothing safe to pick — close and move on
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      mouse(document.body, "mousedown");
+      return "";
+    }
+    mouse(opts[i], "mousedown"); mouse(opts[i], "mouseup");
+    if (typeof opts[i].click === "function") opts[i].click();
+    await sleep(250);
+    return comboDisplay(el);
+  }
+
   async function fillEEOCombos(eeo, doneCats) {
     const res = { count: 0, cats: new Set() };
     if (!eeo || !eeo.length) return res;
-    const combos = [...document.querySelectorAll(
-      "[role='combobox'], button[aria-haspopup='listbox']")]
-      .filter((el) => el.offsetParent !== null && !el.closest(".iti"));
-    for (const el of combos) {
+    for (const el of visibleCombos()) {
       const cat = EEO_ORDER.find((c) => EEO_LABELS[c].test(norm(labelFor(el))));
       if (!cat || doneCats.has(cat) || res.cats.has(cat)) continue;
-      // Disabled until an earlier answer enables it (race waits on the
-      // Hispanic/Latino answer) — leave for a later round.
-      if (el.disabled || el.getAttribute("aria-disabled") === "true") continue;
       const entry = eeo.find((e) => e.cat === cat);
       if (!entry) continue;
-      const holder = el.closest("[class*='select'],[class*='combobox']")
-        || el.parentElement;
-      const shownNow = holder?.querySelector("[class*='single-value']")?.textContent
-        || el.value || "";
-      if (shownNow.trim()) continue;   // already answered — never overwrite
-
-      mouse(el, "mousedown"); mouse(el, "mouseup");
-      if (typeof el.click === "function") el.click();
-      await sleep(400);   // listbox options can render lazily
-      // Greenhouse pages carry ~230 hidden intl-tel-input options; visible
-      // + non-.iti filtering is load-bearing here.
-      const opts = [...document.querySelectorAll("[role='option']")]
-        .filter((o) => o.offsetParent !== null && !o.closest(".iti"));
-      const i = opts.length
-        ? pickEEOOption(cat, entry.value, opts.map((o) => norm(o.textContent)), eeo)
-        : -1;
-      if (i < 0) {   // nothing safe to pick — close and move on
-        el.dispatchEvent(new KeyboardEvent("keydown",
-          { key: "Escape", bubbles: true }));
-        mouse(document.body, "mousedown");
-        continue;
-      }
-      mouse(opts[i], "mousedown"); mouse(opts[i], "mouseup");
-      if (typeof opts[i].click === "function") opts[i].click();
-      await sleep(250);
-      const display = holder?.querySelector("[class*='single-value']")?.textContent
-        || el.value || (el.tagName === "BUTTON" ? el.textContent : "") || "";
+      const display = await driveCombo(
+        el, (texts) => pickEEOOption(cat, entry.value, texts, eeo));
       // Verify: would our own picker have chosen what's now displayed?
       if (norm(display)
           && pickEEOOption(cat, entry.value, [norm(display)], eeo) === 0) {
@@ -265,6 +297,31 @@
       }
     }
     return res;
+  }
+
+  /** Ordinary value fields rendered as custom dropdowns (Country, State,
+   *  and friends on Workday-style forms), which the native <select> pass
+   *  can't see at all. */
+  async function fillValueCombos(values, filledKeys) {
+    let count = 0;
+    for (const el of visibleCombos()) {
+      const label = labelFor(el);
+      if (!norm(label)) continue;
+      const match = values.find(({ field, value }) =>
+        value && !filledKeys.has(fieldKey(field))
+        && !/entered \(full text/.test(value)
+        && labelMatches(field, label));
+      if (!match) continue;
+      const display = await driveCombo(
+        el, (texts) => pickValueOption(texts, match.value));
+      // Verify the same way: the shown value must be one our own picker
+      // would have chosen for this value.
+      if (norm(display) && pickValueOption([display], match.value) === 0) {
+        count++;
+        filledKeys.add(fieldKey(match.field));
+      }
+    }
+    return count;
   }
 
   async function fillAll(pending) {
@@ -308,17 +365,19 @@
       for (const sel of document.querySelectorAll("select")) {
         if (sel.offsetParent === null) continue;
         if (!labelMatches(field, labelFor(sel))) continue;
-        const opt = [...sel.options].find((o) =>
-          norm(o.textContent) === norm(value)
-          || norm(o.textContent).startsWith(norm(value)));
-        if (opt) {
-          sel.value = opt.value;
+        const i = pickValueOption([...sel.options].map((o) => o.textContent), value);
+        if (i >= 0) {
+          sel.value = sel.options[i].value;
           sel.dispatchEvent(new Event("change", { bubbles: true }));
           count++; filledKeys.add(f);
         }
         break;
       }
     }
+    // Custom dropdowns for ordinary fields (Country, State) — invisible
+    // to the native <select> pass above.
+    count += await fillValueCombos(values, filledKeys);
+
     // EEO questions reveal conditionally (answering Hispanic/Latino "No"
     // makes the race question appear, sometimes after a delay) — so fill
     // in ROUNDS: re-scan, fill what's new, wait for reveals to render.

@@ -28,7 +28,7 @@ const FIELDS = [
 const CONFIG_PATH = ["config", "global", "watchlist", "companies"];
 
 export default function AdminPage() {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(undefined);   // undefined = resolving
   const [isAdmin, setIsAdmin] = useState(null);   // null = still checking
   const [lists, setLists] = useState({});          // field -> csv string
   const [enrollAll, setEnrollAll] = useState(false);
@@ -94,25 +94,26 @@ export default function AdminPage() {
   const [jobUrl, setJobUrl] = useState("");
   const [jobUid, setJobUid] = useState("");
   const [addingJob, setAddingJob] = useState(false);
+  const [addStatus, setAddStatus] = useState("");
   const [matches, setMatches] = useState({});     // uid -> [{...app, posting}]
 
   async function addJobFor() {
     const url = jobUrl.trim();
     if (!url || !jobUid) {
-      setStatus("Pick a user and paste a job URL.");
+      setAddStatus("Pick a user and paste a job URL.");
       return;
     }
     setAddingJob(true);
-    setStatus("");
+    setAddStatus("");
     try {
       const call = httpsCallable(functions, "add_job_url", { timeout: 300_000 });
       const res = await call({ url, uid: jobUid });
       const who = users.find((u) => u.uid === jobUid);
-      setStatus(`Added "${res.data.title}" @ ${res.data.company} to `
+      setAddStatus(`Added "${res.data.title}" @ ${res.data.company} to `
         + `${who?.name || "the user"}'s queue.`);
       setJobUrl("");
     } catch (e) {
-      setStatus(`Couldn't add it: ${e.message}`);
+      setAddStatus(`Couldn't add it: ${e.message}`);
     } finally {
       setAddingJob(false);
     }
@@ -158,6 +159,7 @@ export default function AdminPage() {
     }
   }
 
+  if (user === undefined) return null;
   if (!user) return <SignIn title="Admin" />;
   if (isAdmin === null) return <main className="container"><Nav active="/admin" /><Busy label="Checking access…" /></main>;
   if (!isAdmin) {
@@ -212,6 +214,14 @@ export default function AdminPage() {
               ? <><span className="spinner sm" />Reading the posting…</>
               : "Add to their queue"}
           </button>
+          {addStatus && (
+            /^Couldn't/.test(addStatus)
+              ? <div className="notice warn" style={{ marginTop: 10 }}>
+                  <strong>Couldn&apos;t add that job.</strong>{" "}
+                  {addStatus.replace(/^Couldn't add it:\s*/, "")}
+                </div>
+              : <p className="hint" style={{ marginTop: 10 }}>{addStatus}</p>
+          )}
         </div>
       </details>
 

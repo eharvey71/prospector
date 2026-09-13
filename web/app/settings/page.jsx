@@ -13,7 +13,7 @@ import { auth, db, functions } from "../../lib/firebase";
 import { Busy, T, Nav, SignIn, box, btn, btnPrimary, input, label } from "../ui";
 
 export default function SettingsPage() {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(undefined);   // undefined = resolving
   const [status, setStatus] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -229,6 +229,7 @@ export default function SettingsPage() {
     setSuggestions(list => list.filter(x => x.slug !== s.slug));
   }
 
+  if (user === undefined) return null;
   if (!user) return <SignIn title="Settings" />;
 
   return (

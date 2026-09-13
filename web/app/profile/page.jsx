@@ -20,7 +20,7 @@ const EMPTY_EDU = { school: "", degree: "", year: "", bullets: [""] };
 const EMPTY_PROJECT = { name: "", description: "", tech: "" }; // tech: csv in UI
 
 export default function ProfilePage() {
-  const [user, setUser] = useState(null);
+  const [user, setUser] = useState(undefined);   // undefined = resolving
   const [status, setStatus] = useState("");
   const [busyLabel, setBusyLabel] = useState("");   // non-empty = spinner on
   const [resumeInfo, setResumeInfo] = useState(null);
@@ -218,6 +218,7 @@ export default function ProfilePage() {
   const setProject = (i, patch) =>
     setProjects(p => p.map((x, j) => (j === i ? { ...x, ...patch } : x)));
 
+  if (user === undefined) return null;
   if (!user) return <SignIn title="Profile" />;
 
   return (
