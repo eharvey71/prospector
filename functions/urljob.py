@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from html import unescape
 from typing import Optional
 from urllib.parse import parse_qs, urljoin, urlparse
@@ -84,6 +85,19 @@ def linkedin_job_id(url: str) -> Optional[str]:
     return m.group(1) if m else None
 
 
+def expand_short_link(url: str) -> str:
+    """lnkd.in/abc123 -> the real posting URL. Shared LinkedIn links are
+    almost always shortened, and the id parser can't see through them."""
+    if "lnkd.in/" not in url:
+        return url
+    try:
+        resp = httpx.get(url, timeout=HTTP_TIMEOUT, follow_redirects=True,
+                         headers={"User-Agent": BROWSER_UA})
+        return str(resp.url)
+    except httpx.HTTPError:
+        return url
+
+
 def resolve_linkedin(url: str) -> tuple[str, str]:
     """LinkedIn posting URL -> (best_url, description_text).
 
@@ -96,13 +110,27 @@ def resolve_linkedin(url: str) -> tuple[str, str]:
     job_id = linkedin_job_id(url)
     if not job_id:
         return url, ""
-    try:
-        resp = httpx.get(LINKEDIN_GUEST.format(job_id=job_id),
-                         timeout=HTTP_TIMEOUT, follow_redirects=True,
-                         headers={"User-Agent": BROWSER_UA})
-        resp.raise_for_status()
-    except httpx.HTTPError as exc:
-        log.warning("linkedin guest fetch %s failed: %s", job_id, exc)
+    # LinkedIn rate-limits cloud egress (Functions run on Google IPs) and
+    # answers 429/999 in bursts, so a single attempt fails far more often
+    # than the posting is actually unavailable. Three tries, backing off.
+    resp = None
+    for attempt in range(3):
+        try:
+            r = httpx.get(LINKEDIN_GUEST.format(job_id=job_id),
+                          timeout=HTTP_TIMEOUT, follow_redirects=True,
+                          headers={"User-Agent": BROWSER_UA,
+                                   "Accept": "text/html,*/*;q=0.8",
+                                   "Accept-Language": "en-US,en;q=0.9"})
+            if r.status_code < 400:
+                resp = r
+                break
+            log.info("linkedin guest %s attempt %d: HTTP %s",
+                     job_id, attempt + 1, r.status_code)
+        except httpx.HTTPError as exc:
+            log.info("linkedin guest %s attempt %d: %s", job_id, attempt + 1, exc)
+        time.sleep(1.5 * (attempt + 1))
+    if resp is None:
+        log.warning("linkedin guest fetch %s failed after retries", job_id)
         return url, ""
 
     html = resp.text
@@ -234,6 +262,7 @@ def create_posting_from_url(db, url: str) -> tuple[str, dict]:
     # LinkedIn (and other aggregators) are indexes, not application
     # destinations: follow through to the employer's own ATS page when the
     # listing offers one, so submission lands in Tier 1 instead of Tier 2.
+    url = expand_short_link(url)
     linkedin_text = ""
     if "linkedin.com/jobs" in url:
         resolved, linkedin_text = resolve_linkedin(url)
@@ -243,6 +272,19 @@ def create_posting_from_url(db, url: str) -> tuple[str, dict]:
             # Easy-Apply-only listing: keep LinkedIn's own description
             # rather than failing, and let the human apply there.
             return _upsert_from_text(db, url, linkedin_text)
+        else:
+            # Guest endpoint blocked or empty. Falling through to fetch
+            # linkedin.com directly is pointless — LinkedIn serves a 404
+            # to logged-out server clients, which then reads as "this job
+            # was taken down" when the posting is perfectly alive.
+            raise ValueError(
+                "LinkedIn blocks automated reads from cloud servers, so the "
+                "engine can't open this posting (the job itself is probably "
+                "fine). Open it in your browser and use the 'Apply on "
+                "company website' link, then paste THAT employer URL — the "
+                "engine can read those, and can usually submit them "
+                "automatically. LinkedIn Easy Apply jobs have to be done by "
+                "hand on LinkedIn.")
 
     # BambooHR: the page is an empty JS shell, but the posting is public
     # JSON — no fetch-and-guess, no LLM extraction needed.

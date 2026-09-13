@@ -187,7 +187,11 @@ export default function AdminPage() {
         <div className="panelbody">
           <p className="hint" style={{ marginTop: 8 }}>
             Drops the posting straight into their Matches, score gate
-            bypassed (same as when they paste a URL themselves).
+            bypassed (same as when they paste a URL themselves). For
+            LinkedIn jobs, open the posting and paste the &quot;Apply on
+            company website&quot; URL instead — LinkedIn blocks server-side
+            reads, and the employer&apos;s own page is what the engine can
+            submit to anyway.
           </p>
           <span style={labelStyle}>User</span>
           <select style={input} value={jobUid}
