@@ -253,13 +253,25 @@ BOT_WALL_RX = re.compile(
     r"|access denied|request (blocked|unsuccessful)"
     r"|unusual traffic|\bcaptcha\b|cf-ray|cloudflare ray id", re.I)
 
-# Real postings are long; a wall is short. Both conditions must hold, so a
-# posting that merely mentions "captcha" in its text still goes through.
+# A wall LEADS with its message, so the opening of the page is the
+# reliable signal — some sites wrap the wall in their full nav and footer,
+# which defeats a page-length test. A posting that merely mentions
+# "captcha" deep in its text still goes through.
+BOT_WALL_HEAD_CHARS = 600
 BOT_WALL_MAX_CHARS = 1200
 
 
 def _is_bot_wall(text: str) -> bool:
+    if BOT_WALL_RX.search(text[:BOT_WALL_HEAD_CHARS]):
+        return True
     return len(text) < BOT_WALL_MAX_CHARS and bool(BOT_WALL_RX.search(text))
+
+
+def is_wall_title(title: str) -> bool:
+    """Last line of defence, applied to the EXTRACTED title. Whatever the
+    page heuristics miss shows up here: a posting called "Please click to
+    confirm you are not a robot" is never a real job."""
+    return bool(BOT_WALL_RX.search(title or ""))
 
 
 def _infer_source(url: str) -> AtsType:
@@ -366,10 +378,19 @@ def _upsert_from_text(db, url: str, text: str,
         system=EXTRACT_SYSTEM,
         max_tokens=300,
     )
+    title = (facts.title or "").strip() or page_title or "(title not found)"
+    # Backstop: if the extracted title is a bot-check message, the page was
+    # a wall no matter what the text heuristics thought.
+    if is_wall_title(title) or is_wall_title(page_title or ""):
+        raise ValueError(
+            "that site answered with a bot-check page instead of the "
+            "posting, so there's nothing to read. Open it in your browser "
+            "and paste the URL you land on after the check, or use a "
+            "direct link to the employer's application form")
     return _upsert(
         db, url,
         company=(facts.company or httpx.URL(url).host or "unknown").strip(),
-        title=(facts.title or "").strip() or page_title or "(title not found)",
+        title=title,
         location=facts.location,
         text=text,
     )
