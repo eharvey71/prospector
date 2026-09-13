@@ -64,6 +64,15 @@ chrome.runtime.onMessage.addListener((msg, _sender, respond) => {
 
 function addToQueue(url) {
   if (!url || !/^https?:/.test(url)) return;
+  // Never queue Prospector itself. The toolbar button's fallback is "send
+  // this page to the queue", and on the app's own pages (where the panel
+  // is deliberately disabled) that fallback added the app as a job.
+  try {
+    if (new URL(url).origin === APP_URL
+        || /(^|\.)job-engine-c8f9c\.web\.app$/.test(new URL(url).hostname)) {
+      return;
+    }
+  } catch { return; }
   chrome.tabs.create({ url: `${APP_URL}/?add=${encodeURIComponent(url)}` });
 }
 

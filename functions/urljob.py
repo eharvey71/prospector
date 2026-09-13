@@ -291,6 +291,12 @@ def create_posting_from_url(db, url: str) -> tuple[str, dict]:
     # LinkedIn (and other aggregators) are indexes, not application
     # destinations: follow through to the employer's own ATS page when the
     # listing offers one, so submission lands in Tier 1 instead of Tier 2.
+    # Backstop for the extension's toolbar fallback: Prospector is not a
+    # job posting, and "Prospector @ job-engine-c8f9c.web.app" in the
+    # queue helps nobody.
+    if re.search(r"(^|\.)job-engine-c8f9c\.web\.app", httpx.URL(url).host or ""):
+        raise ValueError("that's Prospector itself, not a job posting")
+
     url = expand_short_link(url)
     linkedin_text = ""
     if "linkedin.com/jobs" in url:
