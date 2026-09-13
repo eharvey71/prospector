@@ -54,6 +54,23 @@ export default function SettingsPage() {
   const [salaryStrategy, setSalaryStrategy] = useState("exact");
   const [tailorResume, setTailorResume] = useState(false);
   const [emailMatches, setEmailMatches] = useState(false);
+  const [testingDigest, setTestingDigest] = useState(false);
+
+  async function sendTestDigest() {
+    setTestingDigest(true);
+    setStatus("");
+    try {
+      const call = httpsCallable(functions, "send_test_digest", { timeout: 120_000 });
+      const res = await call({});
+      setStatus(`Test digest sent to ${res.data.to} with `
+        + `${res.data.matches} match${res.data.matches === 1 ? "" : "es"} — `
+        + `check your inbox (subject starts with [test]).`);
+    } catch (e) {
+      setStatus(`Couldn't send it: ${e.message}`);
+    } finally {
+      setTestingDigest(false);
+    }
+  }
   const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
   const [leverBoards, setLeverBoards] = useState("");
   const [customPages, setCustomPages] = useState(""); // career page URLs
@@ -455,6 +472,16 @@ export default function SettingsPage() {
             (one digest a day, never one per job — sent to the address on
             your Profile)</span>
           </label>
+          <button className="btn" disabled={testingDigest}
+                  style={{ marginTop: 8 }} onClick={sendTestDigest}>
+            {testingDigest
+              ? <><span className="spinner sm" />Sending…</>
+              : "Send me a test digest now"}
+          </button>
+          <p className="hint">
+            Builds the real email from your current matches and sends it
+            immediately. Doesn&apos;t affect tomorrow&apos;s digest.
+          </p>
           <span className="field-label">When a form asks for salary expectations</span>
           <select value={salaryStrategy}
                   onChange={e => setSalaryStrategy(e.target.value)}>

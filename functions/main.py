@@ -101,6 +101,26 @@ def crawl_boards(event: scheduler_fn.ScheduledEvent) -> None:
 # this only queues documents into the `mail` collection.
 # ---------------------------------------------------------------------------
 
+@https_fn.on_call(timeout_sec=120)
+def send_test_digest(req: https_fn.CallableRequest) -> dict:
+    """Queue the real digest now, from current matches. Doesn't touch the
+    lastSentAt marker, so tomorrow's scheduled digest is unaffected."""
+    if req.auth is None:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.UNAUTHENTICATED, "sign in first")
+    uid = ((req.data or {}).get("uid") or "").strip() or req.auth.uid
+    if uid != req.auth.uid and not (req.auth.token or {}).get("admin"):
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.PERMISSION_DENIED,
+            "only an admin can send a digest for another user")
+    from notify import send_test_digest as run
+    try:
+        return run(_db(), uid)
+    except ValueError as exc:
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.FAILED_PRECONDITION, str(exc))
+
+
 @scheduler_fn.on_schedule(schedule="0 13 * * *", timeout_sec=300)
 def email_match_digests(event: scheduler_fn.ScheduledEvent) -> None:
     from notify import send_match_digests

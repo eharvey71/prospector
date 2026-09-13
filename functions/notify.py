@@ -38,6 +38,61 @@ def send_match_digests(db: firestore.Client) -> int:
     return sent
 
 
+def _collect_rows(db: firestore.Client, uid: str, since=None) -> list[dict]:
+    """The user's matched jobs, newest-matched first when `since` is given
+    and simply all of them when it isn't (the test digest)."""
+    q = (db.collection("users").document(uid).collection("applications")
+         .where(filter=FieldFilter("state", "==", "matched")))
+    if since is not None:
+        q = q.where(filter=FieldFilter("updatedAt", ">", since))
+    rows = []
+    for snap in q.limit(50).stream():
+        a = snap.to_dict() or {}
+        p = (db.collection("jobPostings").document(a.get("posting_id") or snap.id)
+             .get().to_dict() or {})
+        rows.append({
+            "score": (a.get("match") or {}).get("score"),
+            "title": p.get("title") or "(untitled)",
+            "company": p.get("company") or "",
+            "url": p.get("url") or "",
+        })
+    rows.sort(key=lambda r: r["score"] or 0, reverse=True)
+    return rows
+
+
+def _queue_mail(db: firestore.Client, to: str, rows: list[dict],
+                prefix: str = "") -> None:
+    db.collection("mail").add({
+        "to": [to],
+        "message": {
+            "subject": prefix + _subject(rows),
+            "html": _html(rows),
+            "text": _text(rows),
+        },
+    })
+
+
+def send_test_digest(db: firestore.Client, uid: str) -> dict:
+    """Queue the real digest, on demand, from the user's current matches.
+
+    Deliberately ignores both the daily window and the lastSentAt marker
+    so it can be run any time, and does NOT move that marker — a test
+    must not swallow tomorrow's real digest. Raises ValueError with a
+    user-facing reason when there's nothing to send."""
+    data = db.collection("users").document(uid).get().to_dict() or {}
+    to = (data.get("email") or "").strip()
+    if not to:
+        raise ValueError("no email address on your Profile to send to")
+    rows = _collect_rows(db, uid)
+    if not rows:
+        raise ValueError("you have no matched jobs right now, so a digest "
+                         "would be empty — add a job by URL or wait for the "
+                         "next crawl, then try again")
+    _queue_mail(db, to, rows, prefix="[test] ")
+    log.info("queued TEST digest uid=%s matches=%d", uid, len(rows))
+    return {"to": to, "matches": len(rows)}
+
+
 def _digest_for_user(db: firestore.Client, user_doc) -> bool:
     uid = user_doc.id
     data = user_doc.to_dict() or {}
@@ -54,34 +109,11 @@ def _digest_for_user(db: firestore.Client, user_doc) -> bool:
         # First run: look back a day rather than emailing the whole history.
         since = datetime.now(timezone.utc) - timedelta(days=1)
 
-    apps = list(db.collection("users").document(uid).collection("applications")
-                .where(filter=FieldFilter("state", "==", "matched"))
-                .where(filter=FieldFilter("updatedAt", ">", since))
-                .limit(50).stream())
-    if not apps:
+    rows = _collect_rows(db, uid, since)
+    if not rows:
         return False
 
-    rows = []
-    for snap in apps:
-        a = snap.to_dict() or {}
-        p = (db.collection("jobPostings").document(a.get("posting_id") or snap.id)
-             .get().to_dict() or {})
-        rows.append({
-            "score": (a.get("match") or {}).get("score"),
-            "title": p.get("title") or "(untitled)",
-            "company": p.get("company") or "",
-            "url": p.get("url") or "",
-        })
-    rows.sort(key=lambda r: r["score"] or 0, reverse=True)
-
-    db.collection("mail").add({
-        "to": [to],
-        "message": {
-            "subject": _subject(rows),
-            "html": _html(rows),
-            "text": _text(rows),
-        },
-    })
+    _queue_mail(db, to, rows)
     state_ref.set({"lastSentAt": datetime.now(timezone.utc),
                    "lastCount": len(rows)}, merge=True)
     log.info("queued digest uid=%s matches=%d", uid, len(rows))
