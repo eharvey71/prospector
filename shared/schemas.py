@@ -143,6 +143,9 @@ class Preferences(BaseModel):
     # reworded against the posting (identity fields verbatim). False: the
     # uploaded resume.pdf is attached everywhere.
     tailor_resume: bool = False
+    # Once-a-day email digest of new matches (never per-match: a crawl can
+    # surface a dozen at once). Delivered by the Trigger Email extension.
+    email_matches: bool = False
 
 
 class SelfIdentification(BaseModel):

@@ -57,7 +57,7 @@ def _follow_iframes(client_url: str, html: str, text: str) -> str:
             continue
         try:
             resp = httpx.get(src, timeout=HTTP_TIMEOUT, follow_redirects=True,
-                             headers={"User-Agent": "job-engine/0.1"})
+                             headers=BROWSER_HEADERS)
             resp.raise_for_status()
         except httpx.HTTPError as exc:
             log.warning("iframe %s failed: %s", src, exc)
@@ -173,6 +173,50 @@ def resolve_bamboohr(url: str) -> Optional[tuple[str, str, Optional[str], str]]:
     return company, title, location, desc[:20_000]
 
 
+BROWSER_HEADERS = {
+    "User-Agent": BROWSER_UA,
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
+
+
+def _fetch_page(url: str) -> httpx.Response:
+    """Fetch a posting page the way a browser would.
+
+    A bot-looking User-Agent is a common cause of 403/404 from ATS CDNs
+    (Cloudflare/Akamai in front of Greenhouse, iCIMS, Workday and friends)
+    — the posting is fine, the client just wasn't welcome. Browser headers
+    first; on a 4xx, one retry with the site as referer, which a few
+    boards require for direct job links."""
+    resp = httpx.get(url, timeout=HTTP_TIMEOUT, follow_redirects=True,
+                     headers=BROWSER_HEADERS)
+    if resp.status_code in (401, 403, 404, 405, 429):
+        try:
+            origin = str(httpx.URL(url).copy_with(path="/", query=None, fragment=None))
+            retry = httpx.get(url, timeout=HTTP_TIMEOUT, follow_redirects=True,
+                              headers={**BROWSER_HEADERS, "Referer": origin})
+            if retry.status_code < 400:
+                return retry
+        except httpx.HTTPError:
+            pass
+    resp.raise_for_status()
+    return resp
+
+
+def _fetch_hint(url: str, exc: Exception) -> str:
+    """User-facing message that says which KIND of failure this was."""
+    status = getattr(getattr(exc, "response", None), "status_code", None)
+    if status == 404:
+        return ("that posting URL returns 404 — the job was probably taken "
+                "down, or the link is a search result rather than the "
+                "posting itself; open it in your browser to check")
+    if status in (401, 403):
+        return ("that site refused an automated fetch (403) — open the "
+                "posting in your browser and use the extension's toolbar "
+                "button to add it instead")
+    return f"could not fetch that URL: {exc}"
+
+
 def _infer_source(url: str) -> AtsType:
     """Hosted Greenhouse/Lever postings get their Tier-1 adapter even when
     found via a career page or pasted by hand."""
@@ -209,11 +253,9 @@ def create_posting_from_url(db, url: str) -> tuple[str, dict]:
                        location=location, text=text)
 
     try:
-        resp = httpx.get(url, timeout=HTTP_TIMEOUT, follow_redirects=True,
-                         headers={"User-Agent": "job-engine/0.1"})
-        resp.raise_for_status()
+        resp = _fetch_page(url)
     except httpx.HTTPError as exc:
-        raise ValueError(f"could not fetch that URL: {exc}") from exc
+        raise ValueError(_fetch_hint(url, exc)) from exc
 
     text = _strip_html(resp.text)[:20_000]
     if len(text) < 1500:  # thin page -> the real posting may be in an iframe

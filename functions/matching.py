@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from llm import generate_structured
 from schemas import (AppState, Application, MatchResult, MatchRubric, RedFlag,
                      StateEvent, UserProfile)
+from state_machine import advance
 
 log = logging.getLogger("matching")
 
@@ -143,6 +144,54 @@ def match_posting_for_user(
         _bump(db, uid, prefiltered=1)
         return
 
+    # A forced add CLAIMS the document before spending a second on
+    # scoring. Writing the posting fires on_posting_written, whose
+    # non-forced fan-out scores the same job for the same user
+    # concurrently; whoever writes first wins, and a below-bar fan-out
+    # landing first put a deliberately-added job straight into Done.
+    # Claiming first makes the race deterministic, and a scoring failure
+    # now leaves the job in Matches (where the user put it) rather than
+    # nowhere. DISCOVERED, not MATCHED: the drafting trigger must not
+    # fire until the score exists.
+    if force:
+        try:
+            app_ref.create({
+                **Application(
+                    posting_id=posting_id, user_added=True,
+                    state=AppState.DISCOVERED,
+                    state_history=[StateEvent(state=AppState.DISCOVERED,
+                                              note="user-added; scoring")],
+                ).model_dump(mode="json"),
+                "updatedAt": datetime.now(timezone.utc),
+            })
+        except AlreadyExists:
+            # The fan-out got there first; it already scored the job, so
+            # reuse that assessment instead of paying for a second one.
+            log.info("uid=%s posting=%s claimed by fan-out; reviving",
+                     uid, posting_id)
+            _revive_if_terminal(app_ref, app_ref.get().to_dict() or {})
+            return
+        try:
+            result = _to_match_result(generate_structured(
+                _match_prompt(profile, posting),
+                MatchAssessment,
+                system=(ENTRY_MATCH_SYSTEM if profile.career_stage == "entry"
+                        else MATCH_SYSTEM),
+                max_tokens=1200,
+            ))
+            note = f"score {result.score} (user-added, gate bypassed)"
+            extra = {"match": result.model_dump(mode="json")}
+        except Exception as exc:
+            # Never strand a job the user explicitly asked for.
+            log.exception("forced scoring failed uid=%s posting=%s", uid, posting_id)
+            note = f"user-added; scoring unavailable ({type(exc).__name__})"
+            extra = {}
+        advance(db, uid, app_id, AppState.DISCOVERED, AppState.MATCHED,
+                note=note, extra_fields=extra)
+        _bump(db, uid, scored=1, matched=1)
+        log.info("uid=%s posting=%s -> matched (%s)", uid, posting_id, note)
+        return
+
     assessment = generate_structured(
         _match_prompt(profile, posting),
         MatchAssessment,
@@ -152,14 +201,13 @@ def match_posting_for_user(
     result = _to_match_result(assessment)
 
     threshold = profile.preferences.min_match_score
-    passed = force or result.score >= threshold
+    passed = result.score >= threshold
     state = AppState.MATCHED if passed else AppState.REJECTED
-    note = f"score {result.score} vs threshold {threshold}" + (
-        " (user-added, gate bypassed)" if force else "")
+    note = f"score {result.score} vs threshold {threshold}"
 
     app = Application(
         posting_id=posting_id,
-        user_added=force,
+        user_added=False,
         state=state,
         state_history=[
             StateEvent(state=AppState.DISCOVERED, note="created by matcher"),
@@ -180,8 +228,6 @@ def match_posting_for_user(
         app_ref.create(doc)
     except AlreadyExists:
         log.info("uid=%s posting=%s lost creation race", uid, posting_id)
-        if force:
-            _revive_if_terminal(app_ref, app_ref.get().to_dict() or {})
         return
     _bump(db, uid, scored=1, **({"matched": 1} if passed else {}))
     log.info("uid=%s posting=%s -> %s (%s)", uid, posting_id, state.value, note)

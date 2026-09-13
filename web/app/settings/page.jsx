@@ -53,6 +53,7 @@ export default function SettingsPage() {
   const [autoDraft, setAutoDraft] = useState(false);
   const [salaryStrategy, setSalaryStrategy] = useState("exact");
   const [tailorResume, setTailorResume] = useState(false);
+  const [emailMatches, setEmailMatches] = useState(false);
   const [ghBoards, setGhBoards] = useState("");       // comma-separated slugs
   const [leverBoards, setLeverBoards] = useState("");
   const [customPages, setCustomPages] = useState(""); // career page URLs
@@ -89,6 +90,7 @@ export default function SettingsPage() {
         setAutoDraft(p.auto_draft ?? false);
         setSalaryStrategy(p.salary_strategy || "exact");
         setTailorResume(p.tailor_resume ?? false);
+        setEmailMatches(p.email_matches ?? false);
       }
       const wl = await getDoc(doc(db, "users", user.uid, "watchlist", "companies"));
       if (wl.exists()) {
@@ -135,6 +137,7 @@ export default function SettingsPage() {
         auto_draft: autoDraft,
         salary_strategy: salaryStrategy,
         tailor_resume: tailorResume,
+        email_matches: emailMatches,
       },
       updatedAt: serverTimestamp(),
     }, { merge: true });
@@ -444,6 +447,13 @@ export default function SettingsPage() {
             resume for each application <span className="hint" style={{ display: "inline" }}>
             (a per-job PDF built from your profile facts — nothing invented.
             Off: your uploaded resume.pdf goes everywhere.)</span>
+          </label>
+          <label style={{ display: "block", marginTop: 8 }}>
+            <input type="checkbox" checked={emailMatches}
+                   onChange={e => setEmailMatches(e.target.checked)} /> Email me
+            when new matches are found <span className="hint" style={{ display: "inline" }}>
+            (one digest a day, never one per job — sent to the address on
+            your Profile)</span>
           </label>
           <span className="field-label">When a form asks for salary expectations</span>
           <select value={salaryStrategy}

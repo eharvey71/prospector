@@ -97,6 +97,22 @@ def crawl_boards(event: scheduler_fn.ScheduledEvent) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Daily match digest (email). Delivery is the Trigger Email extension;
+# this only queues documents into the `mail` collection.
+# ---------------------------------------------------------------------------
+
+@scheduler_fn.on_schedule(schedule="0 13 * * *", timeout_sec=300)
+def email_match_digests(event: scheduler_fn.ScheduledEvent) -> None:
+    from notify import send_match_digests
+    try:
+        n = send_match_digests(_db())
+        log.info("queued %d match digest(s)", n)
+    except Exception as exc:
+        log.exception("match digest run failed")
+        _health_error("digest", exc)
+
+
+# ---------------------------------------------------------------------------
 # Sweeper: applications stuck in SUBMITTING
 # ---------------------------------------------------------------------------
 
@@ -161,8 +177,15 @@ def on_posting_written(event: firestore_fn.Event) -> None:
         return
 
     # Skip if the doc content didn't meaningfully change (lastSeen-only bumps).
+    # Postings store description_text (model_dump); comparing the camelCase
+    # key alone compared None to None on EVERY update, so re-crawls never
+    # re-ran matching and only brand-new postings ever reached a user.
+    def _desc(d: dict | None) -> str:
+        return ((d or {}).get("description_text")
+                or (d or {}).get("descriptionText") or "")
+
     before = event.data.before.to_dict() if event.data.before else None
-    if before and before.get("descriptionText") == posting.get("descriptionText"):
+    if before and _desc(before) == _desc(posting):
         return
 
     from matching import match_posting_for_user

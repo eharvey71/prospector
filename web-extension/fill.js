@@ -105,9 +105,19 @@
     const find = (rx) => opts.findIndex((o) => rx.test(o));
     if (DECLINE_RX.test(v)) return find(DECLINE_RX);
     if (cat === "veteran") {
-      if (/\bnot\b/.test(v)) return find(/\bam not\b|\bnot a protected\b/);
-      return opts.findIndex((o) => /protected veteran/.test(o)
+      // Boards word this field a dozen ways: the full VEVRAA sentences,
+      // terse "Not a protected veteran", or a plain Yes/No. Try the
+      // specific phrasings first, then fall back to yes/no polarity, and
+      // leave the field blank when nothing matches confidently.
+      if (/\bnot\b/.test(v)) {
+        const i = find(/\bam not\b|\bnot a protected\b|\bnot a veteran\b/);
+        if (i >= 0) return i;
+        return opts.findIndex((o) => /^no\b/.test(o) && !DECLINE_RX.test(o));
+      }
+      const i = opts.findIndex((o) => /protected veteran|\bveteran\b/.test(o)
         && !/\bnot\b/.test(o) && !DECLINE_RX.test(o));
+      if (i >= 0) return i;
+      return opts.findIndex((o) => /^yes\b/.test(o) && !DECLINE_RX.test(o));
     }
     if (cat === "authorized" || cat === "sponsorship"
         || cat === "hispanic" || cat === "disability") {

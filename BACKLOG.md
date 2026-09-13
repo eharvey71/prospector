@@ -44,6 +44,15 @@ Open items, roughly by value. Move a line to Done (bottom) when shipped.
   (`reference_1_name`, "Reference 1 Email", repeated blocks). Extension
   only, same posture as self-identification: never the unattended worker.
 
+## Known gap
+- **Re-scan the existing pool for a user** — matching only runs when a
+  posting is created or its description changes, so a settings change
+  (new titles, opened-up locations, catalog enrollment) does NOT pull in
+  postings already sitting in the pool; the user waits for new ones. An
+  admin action "re-scan the pool for this user" (iterate active postings,
+  non-forced match) would close it. Bounded by the prefilter, but it's
+  real LLM spend, so keep it deliberate.
+
 ## Bigger pieces
 - **Email outcome tracking** — read confirmation/rejection/interview mail
   (Gmail, read-only), advance post-submission states, learn which score

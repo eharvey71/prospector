@@ -38,6 +38,17 @@ their terminology for anything the candidate lacks. (2) if reviewer \
 concerns are listed, address the most important one head-on in one or two \
 confident sentences — reframe honestly, never apologize, never ignore it."""
 
+def _posting_desc(posting: dict) -> str:
+    """The posting body, under either key.
+
+    Postings are stored from JobPosting.model_dump() as description_text;
+    only some older/aggregator paths used descriptionText. Reading one key
+    alone silently yields "" — which is how every letter and screening
+    answer got written against a BLANK job description until 2026-09."""
+    return (posting.get("description_text")
+            or posting.get("descriptionText") or "")
+
+
 def _no_dashes(text: str) -> str:
     """Belt and braces for the no-em-dash rule: models emit them by habit
     however the prompt is worded, and one stray dash is the tell that a
@@ -268,7 +279,7 @@ CANDIDATE FACTS (the only facts you may use — career stage: {profile.career_st
 Skills: {", ".join(profile.skills)}
 
 JOB: {posting.get("title")} at {posting.get("company")}
-{(posting.get("descriptionText") or "")[:5000]}
+{_posting_desc(posting)[:5000]}
 
 Why this is a fit (from matching): {reasons}
 {concern_block}
@@ -326,7 +337,7 @@ Skills: {", ".join(profile.skills)}.
 {_facts_block(profile)}
 
 Job: {posting.get("title")} at {posting.get("company")}.
-Description excerpt: {(posting.get("descriptionText") or "")[:4000]}
+Description excerpt: {_posting_desc(posting)[:4000]}
 
 Fill the screening answers: why_company (2-3 sentences, specific to this
 company, using the posting's own terminology for skills the candidate
