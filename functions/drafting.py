@@ -13,6 +13,7 @@ import re
 from google.cloud import firestore
 from pydantic import BaseModel, Field
 
+from letter_guard import wrong_employer
 from llm import generate, generate_structured
 from schemas import AppState, Letter, ScreeningAnswers, UserProfile
 from state_machine import advance
@@ -36,7 +37,13 @@ experience the posting names, use the POSTING'S exact terminology for it — \
 recruiters and screening software search for their own words; never borrow \
 their terminology for anything the candidate lacks. (2) if reviewer \
 concerns are listed, address the most important one head-on in one or two \
-confident sentences — reframe honestly, never apologize, never ignore it."""
+confident sentences — reframe honestly, never apologize, never ignore it.
+
+The writing samples are a VOICE reference and nothing else. Some of them \
+are the candidate's older cover letters, written for other employers. \
+Never carry anything factual across from them: not a company name, not a \
+role title, not a reason for applying, not a sentence. The only employer \
+this letter may name or address is the one in the JOB section."""
 
 def _posting_desc(posting: dict) -> str:
     """The posting body, under either key.
@@ -61,7 +68,11 @@ def _no_dashes(text: str) -> str:
 CRITIQUE_SYSTEM = """You are a skeptical hiring manager reviewing a cover \
 letter against the candidate's actual work history, education, and \
 projects. Flag: (1) any claim not supported by those facts — quote it; (2) \
-generic AI-sounding phrases; (3) factual mismatches with the job posting. \
+generic AI-sounding phrases; (3) factual mismatches with the job posting; \
+(4) ANY reference to an employer other than the one named in JOB — a \
+different company addressed or praised, or a reason for applying that \
+belongs to some other organization. Treat (4) as the most serious flag \
+there is: it means the letter was written for the wrong job. \
 If the letter is clean, say so."""
 
 
@@ -137,6 +148,36 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
             system=CRITIQUE_SYSTEM,
         )
         version = 2
+
+    # --- wrong-employer backstop ---
+    # Both passes above are LLM judgement; this one is arithmetic. A letter
+    # that names an old employer from a writing sample instead of the
+    # company being applied to is the single worst failure this feature
+    # has, so it gets one targeted rewrite and then a hard refusal.
+    stray = wrong_employer(letter_text, posting, profile)
+    if stray:
+        log.warning("uid=%s app=%s letter named %r instead of %r — rewriting",
+                    uid, app_id, stray, posting.get("company"))
+        letter_text = _no_dashes(generate(
+            f"This letter names {stray}, but it is an application to "
+            f"{posting.get('company')} for {posting.get('title')}. Rewrite it "
+            f"for {posting.get('company')} only: remove every reference to "
+            f"{stray} and to any other employer, keep the candidate's voice "
+            f"and every claim about their own experience.\n\n{letter_text}",
+            system=DRAFT_SYSTEM,
+            max_tokens=1200,
+            temperature=0.3,
+        ).strip())
+        version += 1
+        if wrong_employer(letter_text, posting, profile):
+            # Failing loudly beats handing someone a letter addressed to
+            # the wrong company: the app stays in MATCHED, and the UI
+            # reports why.
+            raise ValueError(
+                f"the draft kept referring to {stray} instead of "
+                f"{posting.get('company')} — this usually means a past cover "
+                f"letter is saved in Profile > Writing samples; trim it to a "
+                f"paragraph or two of prose and try again")
 
     # --- screening answers ---
     answers = generate_structured(
@@ -270,19 +311,22 @@ def _draft_prompt(profile: UserProfile, posting: dict, app_data: dict) -> str:
         "one per the acceptance rules):\n"
         + "\n".join(f"- {c}" for c in concerns[:3]) + "\n"
     ) if concerns else ""
-    return f"""CANDIDATE WRITING SAMPLES (match this voice):
-{samples}
+    return f"""JOB — the ONLY employer this letter may name or address:
+{posting.get("title")} at {posting.get("company")}
+{_posting_desc(posting)[:5000]}
 
+Why this is a fit (from matching): {reasons}
+{concern_block}
 CANDIDATE FACTS (the only facts you may use — career stage: {profile.career_stage}):
 {_facts_block(profile)}
 
 Skills: {", ".join(profile.skills)}
 
-JOB: {posting.get("title")} at {posting.get("company")}
-{_posting_desc(posting)[:5000]}
+CANDIDATE WRITING SAMPLES — VOICE ONLY. Some are older cover letters
+written for OTHER employers. Copy their rhythm and vocabulary; copy
+nothing factual from them, and never name an employer found here:
+{samples}
 
-Why this is a fit (from matching): {reasons}
-{concern_block}
 Write the cover letter body only — no address block, no date, no
 "Dear Hiring Manager" salutation, no signature."""
 

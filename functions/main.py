@@ -315,7 +315,13 @@ def request_draft(req: https_fn.CallableRequest) -> dict:
             "application not found or not awaiting drafting")
 
     from drafting import draft_application
-    draft_application(db, req.auth.uid, app_id)
+    try:
+        draft_application(db, req.auth.uid, app_id)
+    except ValueError as exc:
+        # A refused draft (e.g. it kept naming the wrong employer): the
+        # message explains what to fix, so show it rather than "internal".
+        raise https_fn.HttpsError(
+            https_fn.FunctionsErrorCode.FAILED_PRECONDITION, str(exc))
     return {"ok": True}
 
 
@@ -434,6 +440,12 @@ def on_application_written(event: firestore_fn.Event) -> None:
         from drafting import draft_application
         try:
             draft_application(db, uid, app_id)
+        except ValueError as exc:
+            # A refused draft is fixable by the user (trim the writing
+            # samples, then click Write the letter). Leave the job in
+            # MATCHED so it stays actionable instead of dropping into Done.
+            log.warning("draft refused uid=%s app=%s: %s", uid, app_id, exc)
+            _health_error("drafting", exc)
         except Exception as exc:
             log.exception("drafting failed uid=%s app=%s", uid, app_id)
             _health_error("drafting", exc)
