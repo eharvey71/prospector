@@ -678,10 +678,14 @@ export default function ReviewQueue() {
       {addBusy && <Busy label="Reading the posting — this can take up to a minute" />}
       {!addBusy && addStatus && (
         // Failures used to whisper in the same muted gray as successes.
-        /^(Couldn't|The extension)/.test(addStatus)
+        /^(Couldn't|The extension|Drafting failed)/.test(addStatus)
           ? <div className="notice warn" style={{ marginBottom: 10 }}>
-              <strong>Couldn&apos;t add that job.</strong>{" "}
-              {addStatus.replace(/^Couldn't add it:\s*/, "")}
+              <strong>
+                {/^Drafting failed/.test(addStatus)
+                  ? "Couldn't write that letter."
+                  : "Couldn't add that job."}
+              </strong>{" "}
+              {addStatus.replace(/^(Couldn't add it|Drafting failed):\s*/, "")}
             </div>
           : <p className="hint" style={{ marginBottom: 10 }}>{addStatus}</p>
       )}

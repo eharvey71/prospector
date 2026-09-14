@@ -489,6 +489,13 @@ export default function ProfilePage() {
         <p style={{ color: T.muted }}>
           Real prose in your voice — this is what keeps cover letters from
           sounding AI-generated. Emails, blog posts, docs — anything you wrote.
+          Only the first 3 samples are used, about 350 words each.
+        </p>
+        <p className="hint" style={{ marginTop: 0 }}>
+          <strong>Not past cover letters.</strong> They carry another
+          employer&apos;s name, and the drafter can borrow it — letters have
+          come out addressed to the wrong company this way. If you want to use
+          one, trim it to a paragraph or two with no company names in it.
         </p>
         {samples.map((s, i) => (
           <div key={i} style={{ ...box, background: T.panelAlt }}>
