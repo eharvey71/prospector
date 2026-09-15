@@ -620,7 +620,9 @@ export default function ReviewQueue() {
         >
           {tier && <span className={`pill ${tier.cls}`}>{m.score}</span>}
           <div className="rowtitle">
-            <span className="t">{p?.title || "…"}</span>
+            <span className={"t" + (p?.title ? "" : " loading")}>
+              {p?.title || "Loading job…"}
+            </span>
             <span className="c">{p?.company || ""}</span>
             {p?.active === false && <span className="pill warn" style={{ marginLeft: 8 }}>may be closed</span>}
           </div>
