@@ -132,6 +132,27 @@ const PAGES = [
   { href: "/extension", title: "Extension" },
 ];
 
+// Icons are inline SVG (no icon library, no network fetch) at 22px, drawn
+// on a 24-grid with currentColor so the active tab tints them.
+const ICONS = {
+  "/": "M4 6h16M4 12h16M4 18h10",                                  // list
+  "/profile": "M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 20c0-3.3 3.6-6 8-6s8 2.7 8 6",
+  "/settings": "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM12 2v3M12 19v3M4.2 4.2l2.1 2.1"
+               + "M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1",
+  "/extension": "M9 3h6v3a2 2 0 1 0 4 0h2v6h-3a2 2 0 1 0 0 4h3v6H9v-3a2 2 0 1 0-4 0H3V9h3a2 2 0 1 0 0-4H3V3h6Z",
+  "/admin": "M12 3l8 4v5c0 4.4-3.2 8.2-8 9-4.8-.8-8-4.6-8-9V7l8-4Z",
+};
+
+function TabIcon({ href }) {
+  return (
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none"
+         stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"
+         strokeLinejoin="round" aria-hidden="true">
+      <path d={ICONS[href] || ICONS["/"]} />
+    </svg>
+  );
+}
+
 export function Nav({ active }) {
   const [email, setEmail] = useState("");
   const [isAdmin, setIsAdmin] = useState(false);
@@ -145,20 +166,35 @@ export function Nav({ active }) {
   }), []);
   const pages = isAdmin ? [...PAGES, { href: "/admin", title: "Admin" }] : PAGES;
   return (
-    <nav className="nav">
-      <span className="brand">Prospector</span>
-      {/* Link, not <a>: a plain href reloads the whole app on every tab,
-          which re-runs Firebase auth from scratch and flashes the sign-in
-          screen between pages. */}
-      {pages.map((p) => (
-        <Link key={p.href} href={p.href}
-              className={p.href === active ? "active" : undefined}>
-          {p.title}
-        </Link>
-      ))}
-      <span className="spacer" />
-      {email && <span className="navmail">{email}</span>}
-      <button className="signout" onClick={() => signOut(auth)}>Sign out</button>
-    </nav>
+    <>
+      <nav className="nav">
+        <span className="brand">Prospector</span>
+        {/* Link, not <a>: a plain href reloads the whole app on every tab,
+            which re-runs Firebase auth from scratch and flashes the sign-in
+            screen between pages. */}
+        {pages.map((p) => (
+          <Link key={p.href} href={p.href}
+                className={p.href === active ? "active" : undefined}>
+            {p.title}
+          </Link>
+        ))}
+        <span className="spacer" />
+        {email && <span className="navmail">{email}</span>}
+        <button className="signout" onClick={() => signOut(auth)}>Sign out</button>
+      </nav>
+
+      {/* Phones get a bottom tab bar instead (CSS hides one or the other):
+          thumb-reachable, always visible, one tap per page — and it frees
+          the top of a small screen for content. */}
+      <nav className="tabbar">
+        {pages.map((p) => (
+          <Link key={p.href} href={p.href}
+                className={p.href === active ? "active" : undefined}>
+            <TabIcon href={p.href} />
+            <span>{p.title}</span>
+          </Link>
+        ))}
+      </nav>
+    </>
   );
 }
