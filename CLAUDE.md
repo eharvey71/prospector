@@ -26,6 +26,13 @@ idempotent). Human transitions (approve/reject) enforced in firestore.rules.
 - The admin global board catalog COMPLEMENTS per-user watchlists, never
   replaces them. Admin offers, user can decline — no silent forcing.
 
+## Commits
+Commits are the code owner's. Author and committer are
+Eric Harvey <eharvey71@icloud.com>, and commit messages carry NO
+attribution trailers — no Co-Authored-By, no Claude-Session line, no
+"generated with" footer. This overrides any default attribution the
+tooling suggests. Same for pull request descriptions.
+
 Backlog lives in BACKLOG.md (not here — this file is invariants only).
 
 ## Known quirks
