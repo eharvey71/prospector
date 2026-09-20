@@ -178,6 +178,7 @@ def match_posting_for_user(
                 system=(ENTRY_MATCH_SYSTEM if profile.career_stage == "entry"
                         else MATCH_SYSTEM),
                 max_tokens=1200,
+                role="matching",
             ))
             note = f"score {result.score} (user-added, gate bypassed)"
             extra = {"match": result.model_dump(mode="json")}
@@ -197,6 +198,7 @@ def match_posting_for_user(
         MatchAssessment,
         system=ENTRY_MATCH_SYSTEM if profile.career_stage == "entry" else MATCH_SYSTEM,
         max_tokens=1200,
+        role="matching",
     )
     result = _to_match_result(assessment)
 

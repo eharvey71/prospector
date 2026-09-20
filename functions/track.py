@@ -71,7 +71,8 @@ def _slug_variants(name: str) -> list[str]:
 
 def track_company(db: firestore.Client, uid: str, name: str) -> dict:
     resolution = generate_structured(
-        f"Company: {name}", CompanyResolution, system=RESOLVE_SYSTEM, max_tokens=400,
+        f"Company: {name}", CompanyResolution, system=RESOLVE_SYSTEM,
+        max_tokens=400, role="track",
     )
     slugs = list(dict.fromkeys(_slug_variants(name) + [
         re.sub(r"[^a-z0-9-]+", "", s.lower()) for s in resolution.slugs if s

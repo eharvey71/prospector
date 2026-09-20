@@ -31,6 +31,7 @@ def expand_metro(center: str, radius_miles: int) -> list[str]:
         TownList,
         system=METRO_SYSTEM,
         max_tokens=700,
+        role="metro",
     )
     out: list[str] = []
     seen: set[str] = set()

@@ -139,6 +139,7 @@ def suggest_companies(role_description: str, exclude: set[str],
                 CandidateList,
                 system=SUGGEST_SYSTEM,
                 max_tokens=2500,
+                role="suggest",
             )
             fresh = [c for c in proposal.candidates[:ROUND_CANDIDATES]
                      if c.company and c.company.lower() not in

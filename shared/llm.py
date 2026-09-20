@@ -11,6 +11,12 @@ Env:
     GOOGLE_CLOUD_PROJECT [, VERTEX_LOCATION]          (vertex)
     OPENAI_API_KEY [, OPENAI_BASE_URL]                (openai)
     LLM_DAILY_TOKEN_BUDGET   spend tripwire; 0 disables
+
+Per-call-site override: every call passes a role (matching, drafting,
+judge, agent, ...). LLM_PROVIDER_<ROLE> and LLM_MODEL_<ROLE> override the
+globals for that role alone, so one part of the pipeline can be moved to
+a new model while the rest stays put. Spend is recorded per model per
+day, which is what makes the comparison worth anything.
 """
 from __future__ import annotations
 
@@ -35,6 +41,21 @@ DAILY_TOKEN_BUDGET = int(os.environ.get("LLM_DAILY_TOKEN_BUDGET", "2000000"))
 log = logging.getLogger("llm")
 
 
+def resolve(role: Optional[str] = None) -> tuple[str, str]:
+    """(provider, model) for one call site.
+
+    A role is just a name — "matching", "drafting", "judge". Setting
+    LLM_MODEL_JUDGE moves the judge to another model and leaves everything
+    else alone; setting LLM_PROVIDER_JUDGE moves it to another vendor
+    entirely. Nothing set means the global LLM_PROVIDER/LLM_MODEL, which
+    is the normal case."""
+    if not role:
+        return PROVIDER, MODEL
+    key = re.sub(r"[^A-Z0-9]", "_", role.upper())
+    return (os.environ.get(f"LLM_PROVIDER_{key}") or PROVIDER,
+            os.environ.get(f"LLM_MODEL_{key}") or MODEL)
+
+
 class BudgetExceeded(RuntimeError):
     """Raised instead of calling the provider once today's spend passes
     DAILY_TOKEN_BUDGET. Every caller already survives a failed generate():
@@ -44,8 +65,14 @@ class BudgetExceeded(RuntimeError):
 _health_db = None  # lazy firestore client, shared across calls
 
 
+def _safe_doc_id(text: str) -> str:
+    """Firestore document ids can't contain '/'. Model ids increasingly
+    carry dots and slashes (vendor/model-1.2), so flatten them."""
+    return re.sub(r"[^A-Za-z0-9._-]", "_", text)[:200]
+
+
 def _record_usage(input_tokens: int, output_tokens: int,
-                  error: str | None = None) -> None:
+                  error: str | None = None, model: str = "") -> None:
     """Best-effort spend/error accounting into the global `health`
     collection (cumulative doc + per-day doc). The engine hit a provider
     spend cap once with zero visibility — never again. Must never break a
@@ -66,9 +93,19 @@ def _record_usage(input_tokens: int, output_tokens: int,
             counters["errors"] = firestore.Increment(1)
             counters["lastErrorAt"] = now
             counters["lastError"] = error[:300]
+        if model:
+            counters["lastModel"] = model
+        day = now.strftime("%Y%m%d")
         _health_db.collection("health").document("llm").set(counters, merge=True)
-        _health_db.collection("health").document(
-            f"llm_{now.strftime('%Y%m%d')}").set(counters, merge=True)
+        _health_db.collection("health").document(f"llm_{day}").set(
+            counters, merge=True)
+        # Per model per day. The budget still counts the whole pipeline
+        # together (above); this doc is what makes two models running side
+        # by side comparable on cost and error rate.
+        if model:
+            _health_db.collection("health").document(
+                f"llm_{_safe_doc_id(model)}_{day}").set(
+                    {**counters, "model": model}, merge=True)
     except Exception:
         log.debug("llm usage recording failed", exc_info=True)
 
@@ -115,29 +152,34 @@ def generate(
     max_tokens: int = 2000,
     temperature: float = 0.7,
     json_mode: bool = False,
+    role: Optional[str] = None,
 ) -> str:
     """Single-turn text generation. json_mode asks providers that support
     it to guarantee syntactically valid JSON (others ignore it and lean on
-    the prompt plus the repair pass in generate_structured)."""
+    the prompt plus the repair pass in generate_structured). role names the
+    call site so LLM_PROVIDER_<ROLE>/LLM_MODEL_<ROLE> can redirect it."""
     if _over_budget():
         raise BudgetExceeded(
             f"daily LLM token budget ({DAILY_TOKEN_BUDGET}) exhausted; "
             f"resets at UTC midnight, or raise LLM_DAILY_TOKEN_BUDGET")
-    if PROVIDER == "anthropic":
+    provider, model = resolve(role)
+    if provider == "anthropic":
         fn = _anthropic
-    elif PROVIDER == "vertex":
+    elif provider == "vertex":
         fn = _vertex
-    elif PROVIDER in ("openai", "openai_compatible"):
+    elif provider in ("openai", "openai_compatible"):
         fn = _openai
     else:
-        raise ValueError(f"Unknown LLM_PROVIDER: {PROVIDER}")
+        raise ValueError(
+            f"Unknown LLM provider {provider!r}"
+            + (f" for role {role!r}" if role else ""))
     try:
         text, tokens_in, tokens_out = fn(prompt, system, max_tokens,
-                                         temperature, json_mode)
+                                         temperature, json_mode, model)
     except Exception as exc:
-        _record_usage(0, 0, error=f"{type(exc).__name__}: {exc}")
+        _record_usage(0, 0, error=f"{type(exc).__name__}: {exc}", model=model)
         raise
-    _record_usage(tokens_in, tokens_out)
+    _record_usage(tokens_in, tokens_out, model=model)
     return text
 
 
@@ -147,6 +189,7 @@ def generate_structured(
     *,
     system: Optional[str] = None,
     max_tokens: int = 2000,
+    role: Optional[str] = None,
 ) -> T:
     """Generation constrained to a Pydantic schema, with fence-stripping and
     one automatic repair attempt on parse failure."""
@@ -157,7 +200,7 @@ def generate_structured(
         + "No prose, no markdown fences.\n" + schema_json
     )
     raw = generate(prompt, system=full_system, max_tokens=max_tokens,
-                   temperature=0.2, json_mode=True)
+                   temperature=0.2, json_mode=True, role=role)
     try:
         return schema.model_validate_json(_strip_fences(raw))
     except Exception:
@@ -168,6 +211,7 @@ def generate_structured(
             max_tokens=max_tokens,
             temperature=0.0,
             json_mode=True,
+            role=role,
         )
         return schema.model_validate_json(_strip_fences(repair))
 
@@ -187,7 +231,8 @@ _sdk_takes_temperature: Optional[bool] = None
 
 
 def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
-               temperature: float, json_mode: bool = False) -> tuple[str, int, int]:
+               temperature: float, json_mode: bool = False,
+               model: str = "") -> tuple[str, int, int]:
     import anthropic
 
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
@@ -201,7 +246,7 @@ def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
         _sdk_takes_temperature = "temperature" in inspect.signature(
             type(client.messages).create).parameters
     kwargs: dict[str, Any] = dict(
-        model=MODEL,
+        model=model or MODEL,
         max_tokens=max_tokens,
         messages=[{"role": "user", "content": prompt}],
     )
@@ -218,7 +263,8 @@ def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
 
 
 def _vertex(prompt: str, system: Optional[str], max_tokens: int,
-            temperature: float, json_mode: bool = False) -> tuple[str, int, int]:
+            temperature: float, json_mode: bool = False,
+            model: str = "") -> tuple[str, int, int]:
     from google import genai
     from google.genai import types
 
@@ -228,7 +274,7 @@ def _vertex(prompt: str, system: Optional[str], max_tokens: int,
         location=os.environ.get("VERTEX_LOCATION", "us-central1"),
     )
     resp = client.models.generate_content(
-        model=MODEL,
+        model=model or MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(
             system_instruction=system,
@@ -242,16 +288,20 @@ def _vertex(prompt: str, system: Optional[str], max_tokens: int,
             getattr(meta, "candidates_token_count", 0) or 0)
 
 
-# Which argument shape this endpoint accepts, learned from its own error
+# Which argument shape an endpoint accepts, learned from its own error
 # messages on the first call. The GPT-5 generation renamed max_tokens to
 # max_completion_tokens and rejects a non-default temperature; older
 # models and most compatible endpoints do the opposite. Probing beats
 # hard-coding a table of model names that goes stale.
-_openai_shape = {"token_param": None, "temperature": None}
+#
+# Keyed per base_url+model, NOT global: roles can point at two different
+# models at once, and one model's answer is not evidence about another's.
+_openai_shapes: dict[str, dict[str, Any]] = {}
 
 
 def _openai(prompt: str, system: Optional[str], max_tokens: int,
-            temperature: float, json_mode: bool = False) -> tuple[str, int, int]:
+            temperature: float, json_mode: bool = False,
+            model: str = "") -> tuple[str, int, int]:
     """OpenAI and any OpenAI-compatible endpoint.
 
     Env:
@@ -261,13 +311,15 @@ def _openai(prompt: str, system: Optional[str], max_tokens: int,
     """
     from openai import OpenAI
 
-    client = OpenAI(base_url=os.environ.get("OPENAI_BASE_URL") or None)
+    base_url = os.environ.get("OPENAI_BASE_URL") or None
+    model = model or MODEL
+    client = OpenAI(base_url=base_url)
     messages = ([{"role": "system", "content": system}] if system else []) \
         + [{"role": "user", "content": prompt}]
 
     def call(token_param: str, send_temperature: bool):
         kwargs: dict[str, Any] = {
-            "model": MODEL,
+            "model": model,
             "messages": messages,
             token_param: max_tokens,
         }
@@ -277,8 +329,11 @@ def _openai(prompt: str, system: Optional[str], max_tokens: int,
             kwargs["response_format"] = {"type": "json_object"}
         return client.chat.completions.create(**kwargs)
 
-    token_param = _openai_shape["token_param"] or "max_completion_tokens"
-    send_temp = _openai_shape["temperature"]
+    shape = _openai_shapes.setdefault(
+        f"{base_url or 'default'}|{model}",
+        {"token_param": None, "temperature": None})
+    token_param = shape["token_param"] or "max_completion_tokens"
+    send_temp = shape["temperature"]
     send_temp = True if send_temp is None else send_temp
     try:
         resp = call(token_param, send_temp)
@@ -297,8 +352,8 @@ def _openai(prompt: str, system: Optional[str], max_tokens: int,
         if not retried:
             raise
         resp = call(token_param, send_temp)
-    _openai_shape["token_param"] = token_param
-    _openai_shape["temperature"] = send_temp
+    shape["token_param"] = token_param
+    shape["temperature"] = send_temp
 
     text = (resp.choices[0].message.content or "") if resp.choices else ""
     usage = getattr(resp, "usage", None)

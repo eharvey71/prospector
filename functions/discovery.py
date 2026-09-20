@@ -142,6 +142,7 @@ def _crawl_career_page(db: firestore.Client, client: httpx.Client,
         JobLinkPick,
         system=LINK_SYSTEM,
         max_tokens=2000,
+        role="discovery",
     )
     valid = {href for href, _ in links}
     job_links = [h for h in pick.hrefs if h in valid]

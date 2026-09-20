@@ -404,6 +404,7 @@ COVER LETTER (use verbatim for cover_letter controls):
             FormPlan,
             system=PLAN_SYSTEM,
             max_tokens=3000,
+            role="agent",
         )
 
     async def _execute(self, page, inventory: list[dict], plan: FormPlan,
