@@ -38,7 +38,26 @@ MODEL = os.environ.get("LLM_MODEL", "claude-sonnet-4-6")
 # generate() against the health/llm_YYYYMMDD accounting doc. 0 disables.
 DAILY_TOKEN_BUDGET = int(os.environ.get("LLM_DAILY_TOKEN_BUDGET", "2000000"))
 
+# Retry ceiling for the openai provider when a reasoning model spends its
+# whole token cap on reasoning and returns nothing. See _openai().
+REASONING_FLOOR = int(os.environ.get("LLM_REASONING_FLOOR", "4000"))
+
 log = logging.getLogger("llm")
+
+
+def effort_for(role: Optional[str] = None) -> Optional[str]:
+    """Reasoning effort for a call site, or None to let the provider decide.
+
+    Only the openai provider uses it. Benchmarks for these models are
+    quoted at a specific effort, and the gap between settings is large in
+    both quality and latency — so it has to be a knob, not a default we
+    inherit silently. LLM_EFFORT_<ROLE> beats LLM_EFFORT."""
+    if role:
+        key = re.sub(r"[^A-Z0-9]", "_", role.upper())
+        per_role = os.environ.get(f"LLM_EFFORT_{key}")
+        if per_role:
+            return per_role
+    return os.environ.get("LLM_EFFORT") or None
 
 
 def resolve(role: Optional[str] = None) -> tuple[str, str]:
@@ -175,7 +194,8 @@ def generate(
             + (f" for role {role!r}" if role else ""))
     try:
         text, tokens_in, tokens_out = fn(prompt, system, max_tokens,
-                                         temperature, json_mode, model)
+                                         temperature, json_mode, model,
+                                         effort_for(role))
     except Exception as exc:
         _record_usage(0, 0, error=f"{type(exc).__name__}: {exc}", model=model)
         raise
@@ -232,7 +252,8 @@ _sdk_takes_temperature: Optional[bool] = None
 
 def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
                temperature: float, json_mode: bool = False,
-               model: str = "") -> tuple[str, int, int]:
+               model: str = "",
+               effort: Optional[str] = None) -> tuple[str, int, int]:
     import anthropic
 
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
@@ -264,7 +285,8 @@ def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
 
 def _vertex(prompt: str, system: Optional[str], max_tokens: int,
             temperature: float, json_mode: bool = False,
-            model: str = "") -> tuple[str, int, int]:
+            model: str = "",
+            effort: Optional[str] = None) -> tuple[str, int, int]:
     from google import genai
     from google.genai import types
 
@@ -299,15 +321,48 @@ def _vertex(prompt: str, system: Optional[str], max_tokens: int,
 _openai_shapes: dict[str, dict[str, Any]] = {}
 
 
+def _adapt_shape(shape: dict[str, Any], msg: str) -> bool:
+    """Read one rejection and drop/flip the parameter it names.
+
+    True if something changed and the call is worth retrying. Endpoints
+    disagree about these three and say so in prose, so the message is the
+    only honest source — a table of model names goes stale."""
+    changed = False
+    # "Unsupported parameter: 'max_completion_tokens'" (or the reverse)
+    if "max_completion_tokens" in msg or "max_tokens" in msg:
+        shape["token_param"] = (
+            "max_tokens" if shape["token_param"] == "max_completion_tokens"
+            else "max_completion_tokens")
+        changed = True
+    # "Unsupported value: 'temperature' does not support 0.7"
+    if "temperature" in msg and shape["temperature"]:
+        shape["temperature"] = False
+        changed = True
+    # Non-reasoning models and most compatible gateways reject it outright.
+    if "reasoning" in msg and shape["effort"]:
+        shape["effort"] = False
+        changed = True
+    return changed
+
+
+def _usage(resp: Any) -> tuple[int, int]:
+    usage = getattr(resp, "usage", None)
+    return (getattr(usage, "prompt_tokens", 0) or 0,
+            getattr(usage, "completion_tokens", 0) or 0)
+
+
 def _openai(prompt: str, system: Optional[str], max_tokens: int,
             temperature: float, json_mode: bool = False,
-            model: str = "") -> tuple[str, int, int]:
+            model: str = "",
+            effort: Optional[str] = None) -> tuple[str, int, int]:
     """OpenAI and any OpenAI-compatible endpoint.
 
     Env:
         OPENAI_API_KEY    the key
         OPENAI_BASE_URL   optional; point at a compatible gateway
         LLM_MODEL         the model id, verbatim from the provider's docs
+        LLM_EFFORT[_ROLE] reasoning effort, if the model takes one
+        LLM_REASONING_FLOOR  retry ceiling when reasoning eats the budget
     """
     from openai import OpenAI
 
@@ -317,46 +372,54 @@ def _openai(prompt: str, system: Optional[str], max_tokens: int,
     messages = ([{"role": "system", "content": system}] if system else []) \
         + [{"role": "user", "content": prompt}]
 
-    def call(token_param: str, send_temperature: bool):
-        kwargs: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            token_param: max_tokens,
-        }
-        if send_temperature:
-            kwargs["temperature"] = temperature
-        if json_mode:
-            kwargs["response_format"] = {"type": "json_object"}
-        return client.chat.completions.create(**kwargs)
-
     shape = _openai_shapes.setdefault(
         f"{base_url or 'default'}|{model}",
-        {"token_param": None, "temperature": None})
-    token_param = shape["token_param"] or "max_completion_tokens"
-    send_temp = shape["temperature"]
-    send_temp = True if send_temp is None else send_temp
-    try:
-        resp = call(token_param, send_temp)
-    except Exception as exc:
-        msg = str(exc)
-        retried = False
-        # "Unsupported parameter: 'max_completion_tokens'" (or the reverse)
-        if "max_completion_tokens" in msg or "max_tokens" in msg:
-            token_param = ("max_tokens" if token_param == "max_completion_tokens"
-                           else "max_completion_tokens")
-            retried = True
-        # "Unsupported value: 'temperature' does not support 0.7"
-        if "temperature" in msg:
-            send_temp = False
-            retried = True
-        if not retried:
-            raise
-        resp = call(token_param, send_temp)
-    shape["token_param"] = token_param
-    shape["temperature"] = send_temp
+        {"token_param": "max_completion_tokens",
+         "temperature": True, "effort": True})
 
-    text = (resp.choices[0].message.content or "") if resp.choices else ""
-    usage = getattr(resp, "usage", None)
-    return (text,
-            getattr(usage, "prompt_tokens", 0) or 0,
-            getattr(usage, "completion_tokens", 0) or 0)
+    def once(cap: int):
+        """One completion, adapting to whatever the endpoint refuses."""
+        for attempt in range(4):
+            kwargs: dict[str, Any] = {
+                "model": model,
+                "messages": messages,
+                shape["token_param"]: cap,
+            }
+            if shape["temperature"]:
+                kwargs["temperature"] = temperature
+            if json_mode:
+                kwargs["response_format"] = {"type": "json_object"}
+            if effort and shape["effort"]:
+                kwargs["reasoning_effort"] = effort
+            try:
+                return client.chat.completions.create(**kwargs)
+            except Exception as exc:
+                if attempt == 3 or not _adapt_shape(shape, str(exc)):
+                    raise
+        raise RuntimeError("unreachable")
+
+    resp = once(max_tokens)
+    choice = resp.choices[0] if resp.choices else None
+    text = (getattr(choice.message, "content", "") or "") if choice else ""
+    tokens_in, tokens_out = _usage(resp)
+
+    # On a reasoning model the cap covers reasoning tokens too, so a tight
+    # cap can be spent entirely on thinking and return nothing at all —
+    # silently, with finish_reason "length". Several call sites here are
+    # capped at 300-700 because Claude only ever counted visible output.
+    # Retry once with room rather than hand a caller an empty string.
+    if (not text.strip()
+            and getattr(choice, "finish_reason", "") == "length"
+            and max_tokens < REASONING_FLOOR):
+        log.warning("empty completion from %s at %d tokens — reasoning "
+                    "consumed the budget; retrying at %d",
+                    model, max_tokens, REASONING_FLOOR)
+        resp = once(REASONING_FLOOR)
+        choice = resp.choices[0] if resp.choices else None
+        text = (getattr(choice.message, "content", "") or "") if choice else ""
+        retry_in, retry_out = _usage(resp)
+        # Both calls were billed; report both.
+        tokens_in += retry_in
+        tokens_out += retry_out
+
+    return text, tokens_in, tokens_out

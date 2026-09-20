@@ -70,14 +70,16 @@ def test_unknown_provider_names_the_role(monkeypatch):
 def test_generate_passes_resolved_model_to_provider(monkeypatch):
     seen = {}
 
-    def fake(prompt, system, max_tokens, temperature, json_mode, model):
-        seen["model"] = model
+    def fake(prompt, system, max_tokens, temperature, json_mode, model,
+             effort):
+        seen.update(model=model, effort=effort)
         return ("ok", 3, 4)
 
     monkeypatch.setattr(llm, "_anthropic", fake)
     monkeypatch.setenv("LLM_MODEL_DRAFTING", "draft-model")
+    monkeypatch.setenv("LLM_EFFORT_DRAFTING", "high")
     assert llm.generate("hi", role="drafting") == "ok"
-    assert seen["model"] == "draft-model"
+    assert seen == {"model": "draft-model", "effort": "high"}
 
 
 # --- the OpenAI argument probe --------------------------------------------
@@ -89,37 +91,53 @@ class _FakeCompletions:
     def __init__(self, log, rejects):
         self._log, self._rejects = log, rejects
 
+    def __init__(self, log, rejects, reasoning_cost=0):
+        self._log, self._rejects = log, rejects
+        self._reasoning_cost = reasoning_cost
+
     def create(self, **kwargs):
         self._log.append(kwargs)
-        bad = self._rejects.get(kwargs["model"])
-        if bad and bad in kwargs:
-            raise RuntimeError(f"Unsupported parameter: '{bad}' is not "
-                               f"supported with this model.")
-        msg = types.SimpleNamespace(content="answer")
+        for bad in self._rejects.get(kwargs["model"], []):
+            if bad in kwargs:
+                raise RuntimeError(f"Unsupported parameter: '{bad}' is not "
+                                   f"supported with this model.")
+        # A reasoning model spends the cap on thinking first. If the cap
+        # can't cover that, the content comes back empty, not truncated.
+        cap = kwargs.get("max_completion_tokens") or kwargs.get("max_tokens")
+        if cap < self._reasoning_cost:
+            return types.SimpleNamespace(
+                choices=[types.SimpleNamespace(
+                    message=types.SimpleNamespace(content=""),
+                    finish_reason="length")],
+                usage=types.SimpleNamespace(prompt_tokens=11,
+                                            completion_tokens=cap))
         return types.SimpleNamespace(
-            choices=[types.SimpleNamespace(message=msg)],
+            choices=[types.SimpleNamespace(
+                message=types.SimpleNamespace(content="answer"),
+                finish_reason="stop")],
             usage=types.SimpleNamespace(prompt_tokens=11, completion_tokens=7))
 
 
 @pytest.fixture
 def fake_openai(monkeypatch):
-    log, rejects = [], {}
+    log, rejects, tuning = [], {}, {"reasoning_cost": 0}
 
     class FakeClient:
         def __init__(self, base_url=None):
             self.chat = types.SimpleNamespace(
-                completions=_FakeCompletions(log, rejects))
+                completions=_FakeCompletions(log, rejects,
+                                             tuning["reasoning_cost"]))
 
     monkeypatch.setitem(sys.modules, "openai",
                         types.SimpleNamespace(OpenAI=FakeClient))
     monkeypatch.setattr(llm, "_openai_shapes", {})
     monkeypatch.setattr(llm, "PROVIDER", "openai")
-    return log, rejects
+    return types.SimpleNamespace(log=log, rejects=rejects, tuning=tuning)
 
 
 def test_probe_flips_token_param_and_caches(fake_openai, monkeypatch):
-    log, rejects = fake_openai
-    rejects["old-style"] = "max_completion_tokens"
+    log = fake_openai.log
+    fake_openai.rejects["old-style"] = ["max_completion_tokens"]
     monkeypatch.setattr(llm, "MODEL", "old-style")
 
     assert llm.generate("hi") == "answer"
@@ -133,8 +151,8 @@ def test_probe_flips_token_param_and_caches(fake_openai, monkeypatch):
 
 
 def test_probe_is_per_model_not_global(fake_openai, monkeypatch):
-    log, rejects = fake_openai
-    rejects["old-style"] = "max_completion_tokens"
+    log = fake_openai.log
+    fake_openai.rejects["old-style"] = ["max_completion_tokens"]
     monkeypatch.setattr(llm, "MODEL", "old-style")
     monkeypatch.setenv("LLM_MODEL_JUDGE", "new-style")  # takes the new param
 
@@ -148,8 +166,77 @@ def test_probe_is_per_model_not_global(fake_openai, monkeypatch):
     assert log[0]["model"] == "new-style"
 
 
+def test_probe_drops_several_rejected_params(fake_openai, monkeypatch):
+    fake_openai.rejects["fussy"] = ["temperature", "reasoning_effort"]
+    monkeypatch.setattr(llm, "MODEL", "fussy")
+    monkeypatch.setenv("LLM_EFFORT", "high")
+
+    assert llm.generate("hi") == "answer"
+    final = fake_openai.log[-1]
+    assert "temperature" not in final and "reasoning_effort" not in final
+
+
 def test_json_mode_reaches_the_request(fake_openai, monkeypatch):
-    log, _ = fake_openai
     monkeypatch.setattr(llm, "MODEL", "m")
     llm.generate("hi", json_mode=True)
-    assert log[0]["response_format"] == {"type": "json_object"}
+    assert fake_openai.log[0]["response_format"] == {"type": "json_object"}
+
+
+# --- effort ----------------------------------------------------------------
+
+def test_effort_is_per_role(monkeypatch):
+    monkeypatch.setenv("LLM_EFFORT", "low")
+    monkeypatch.setenv("LLM_EFFORT_DRAFTING", "high")
+    assert llm.effort_for("matching") == "low"
+    assert llm.effort_for("drafting") == "high"
+    assert llm.effort_for() == "low"
+
+
+def test_effort_unset_is_not_sent(fake_openai, monkeypatch):
+    monkeypatch.setattr(llm, "MODEL", "m")
+    llm.generate("hi")
+    assert "reasoning_effort" not in fake_openai.log[0]
+
+
+def test_effort_reaches_the_request(fake_openai, monkeypatch):
+    monkeypatch.setattr(llm, "MODEL", "m")
+    monkeypatch.setenv("LLM_EFFORT_MATCHING", "medium")
+    llm.generate("hi", role="matching")
+    assert fake_openai.log[0]["reasoning_effort"] == "medium"
+
+
+# --- the reasoning-budget trap --------------------------------------------
+
+def test_tight_cap_eaten_by_reasoning_is_retried(fake_openai, monkeypatch):
+    """extract and judge are capped at 300 tokens — fine when the cap only
+    covered visible output, fatal when it also covers reasoning."""
+    fake_openai.tuning["reasoning_cost"] = 900
+    monkeypatch.setattr(llm, "MODEL", "thinker")
+    monkeypatch.setattr(llm, "REASONING_FLOOR", 4000)
+
+    assert llm.generate("hi", max_tokens=300) == "answer"
+    caps = [c.get("max_completion_tokens") or c.get("max_tokens")
+            for c in fake_openai.log]
+    assert caps == [300, 4000]
+
+
+def test_retry_bills_both_calls(fake_openai, monkeypatch):
+    recorded = {}
+    monkeypatch.setattr(llm, "_record_usage",
+                        lambda i, o, error=None, model="": recorded.update(
+                            input_tokens=i, output_tokens=o))
+    fake_openai.tuning["reasoning_cost"] = 900
+    monkeypatch.setattr(llm, "MODEL", "thinker")
+    monkeypatch.setattr(llm, "REASONING_FLOOR", 4000)
+
+    llm.generate("hi", max_tokens=300)
+    # 11 prompt tokens twice; 300 burned on the dead call plus 7 on the
+    # good one. A retry that hides its own cost defeats the accounting.
+    assert recorded == {"input_tokens": 22, "output_tokens": 307}
+
+
+def test_generous_cap_is_not_retried(fake_openai, monkeypatch):
+    fake_openai.tuning["reasoning_cost"] = 900
+    monkeypatch.setattr(llm, "MODEL", "thinker")
+    llm.generate("hi", max_tokens=3000)
+    assert len(fake_openai.log) == 1
