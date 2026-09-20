@@ -1,12 +1,16 @@
 """Provider-agnostic LLM access.
 
-One function: generate(). Provider and model come from env vars, so switching
-Vertex <-> Anthropic <-> anything-OpenAI-compatible is a config change.
+One function: generate(). Provider and model come from env vars, so
+switching between Anthropic, Vertex and anything OpenAI-compatible is a
+config change — no caller knows which model is answering.
 
 Env:
-    LLM_PROVIDER   anthropic | vertex          (default: anthropic)
-    LLM_MODEL      provider-specific model id
-    ANTHROPIC_API_KEY / GOOGLE_CLOUD_PROJECT   as appropriate
+    LLM_PROVIDER   anthropic | vertex | openai        (default: anthropic)
+    LLM_MODEL      the provider's model id, verbatim
+    ANTHROPIC_API_KEY                                 (anthropic)
+    GOOGLE_CLOUD_PROJECT [, VERTEX_LOCATION]          (vertex)
+    OPENAI_API_KEY [, OPENAI_BASE_URL]                (openai)
+    LLM_DAILY_TOKEN_BUDGET   spend tripwire; 0 disables
 """
 from __future__ import annotations
 
@@ -110,8 +114,11 @@ def generate(
     system: Optional[str] = None,
     max_tokens: int = 2000,
     temperature: float = 0.7,
+    json_mode: bool = False,
 ) -> str:
-    """Single-turn text generation."""
+    """Single-turn text generation. json_mode asks providers that support
+    it to guarantee syntactically valid JSON (others ignore it and lean on
+    the prompt plus the repair pass in generate_structured)."""
     if _over_budget():
         raise BudgetExceeded(
             f"daily LLM token budget ({DAILY_TOKEN_BUDGET}) exhausted; "
@@ -120,10 +127,13 @@ def generate(
         fn = _anthropic
     elif PROVIDER == "vertex":
         fn = _vertex
+    elif PROVIDER in ("openai", "openai_compatible"):
+        fn = _openai
     else:
         raise ValueError(f"Unknown LLM_PROVIDER: {PROVIDER}")
     try:
-        text, tokens_in, tokens_out = fn(prompt, system, max_tokens, temperature)
+        text, tokens_in, tokens_out = fn(prompt, system, max_tokens,
+                                         temperature, json_mode)
     except Exception as exc:
         _record_usage(0, 0, error=f"{type(exc).__name__}: {exc}")
         raise
@@ -146,7 +156,8 @@ def generate_structured(
         + "Respond with ONLY a JSON object matching this schema. "
         + "No prose, no markdown fences.\n" + schema_json
     )
-    raw = generate(prompt, system=full_system, max_tokens=max_tokens, temperature=0.2)
+    raw = generate(prompt, system=full_system, max_tokens=max_tokens,
+                   temperature=0.2, json_mode=True)
     try:
         return schema.model_validate_json(_strip_fences(raw))
     except Exception:
@@ -156,6 +167,7 @@ def generate_structured(
             system=full_system,
             max_tokens=max_tokens,
             temperature=0.0,
+            json_mode=True,
         )
         return schema.model_validate_json(_strip_fences(repair))
 
@@ -175,7 +187,7 @@ _sdk_takes_temperature: Optional[bool] = None
 
 
 def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
-               temperature: float) -> tuple[str, int, int]:
+               temperature: float, json_mode: bool = False) -> tuple[str, int, int]:
     import anthropic
 
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
@@ -206,7 +218,7 @@ def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
 
 
 def _vertex(prompt: str, system: Optional[str], max_tokens: int,
-            temperature: float) -> tuple[str, int, int]:
+            temperature: float, json_mode: bool = False) -> tuple[str, int, int]:
     from google import genai
     from google.genai import types
 
@@ -228,3 +240,68 @@ def _vertex(prompt: str, system: Optional[str], max_tokens: int,
     return (resp.text or "",
             getattr(meta, "prompt_token_count", 0) or 0,
             getattr(meta, "candidates_token_count", 0) or 0)
+
+
+# Which argument shape this endpoint accepts, learned from its own error
+# messages on the first call. The GPT-5 generation renamed max_tokens to
+# max_completion_tokens and rejects a non-default temperature; older
+# models and most compatible endpoints do the opposite. Probing beats
+# hard-coding a table of model names that goes stale.
+_openai_shape = {"token_param": None, "temperature": None}
+
+
+def _openai(prompt: str, system: Optional[str], max_tokens: int,
+            temperature: float, json_mode: bool = False) -> tuple[str, int, int]:
+    """OpenAI and any OpenAI-compatible endpoint.
+
+    Env:
+        OPENAI_API_KEY    the key
+        OPENAI_BASE_URL   optional; point at a compatible gateway
+        LLM_MODEL         the model id, verbatim from the provider's docs
+    """
+    from openai import OpenAI
+
+    client = OpenAI(base_url=os.environ.get("OPENAI_BASE_URL") or None)
+    messages = ([{"role": "system", "content": system}] if system else []) \
+        + [{"role": "user", "content": prompt}]
+
+    def call(token_param: str, send_temperature: bool):
+        kwargs: dict[str, Any] = {
+            "model": MODEL,
+            "messages": messages,
+            token_param: max_tokens,
+        }
+        if send_temperature:
+            kwargs["temperature"] = temperature
+        if json_mode:
+            kwargs["response_format"] = {"type": "json_object"}
+        return client.chat.completions.create(**kwargs)
+
+    token_param = _openai_shape["token_param"] or "max_completion_tokens"
+    send_temp = _openai_shape["temperature"]
+    send_temp = True if send_temp is None else send_temp
+    try:
+        resp = call(token_param, send_temp)
+    except Exception as exc:
+        msg = str(exc)
+        retried = False
+        # "Unsupported parameter: 'max_completion_tokens'" (or the reverse)
+        if "max_completion_tokens" in msg or "max_tokens" in msg:
+            token_param = ("max_tokens" if token_param == "max_completion_tokens"
+                           else "max_completion_tokens")
+            retried = True
+        # "Unsupported value: 'temperature' does not support 0.7"
+        if "temperature" in msg:
+            send_temp = False
+            retried = True
+        if not retried:
+            raise
+        resp = call(token_param, send_temp)
+    _openai_shape["token_param"] = token_param
+    _openai_shape["temperature"] = send_temp
+
+    text = (resp.choices[0].message.content or "") if resp.choices else ""
+    usage = getattr(resp, "usage", None)
+    return (text,
+            getattr(usage, "prompt_tokens", 0) or 0,
+            getattr(usage, "completion_tokens", 0) or 0)

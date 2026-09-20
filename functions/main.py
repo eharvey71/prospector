@@ -78,7 +78,7 @@ def _health_error(kind: str, exc: Exception) -> None:
 # ---------------------------------------------------------------------------
 
 @scheduler_fn.on_schedule(schedule="every 6 hours", timeout_sec=540,
-                          secrets=["ANTHROPIC_API_KEY"])
+                          secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"])
 def crawl_boards(event: scheduler_fn.ScheduledEvent) -> None:
     # Needs the LLM secret because custom career-page crawling classifies
     # links with generate_structured (see discovery._crawl_career_page).
@@ -187,7 +187,7 @@ def sweep_stuck_submissions(event: scheduler_fn.ScheduledEvent) -> None:
 
 @firestore_fn.on_document_written(
     document="jobPostings/{postingId}", timeout_sec=300,
-    secrets=["ANTHROPIC_API_KEY"],
+    secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
 )
 def on_posting_written(event: firestore_fn.Event) -> None:
     if event.data is None or event.data.after is None:
@@ -224,7 +224,7 @@ def on_posting_written(event: firestore_fn.Event) -> None:
 # APIs verify; the client decides what joins the watchlist.
 # ---------------------------------------------------------------------------
 
-@https_fn.on_call(timeout_sec=300, secrets=["ANTHROPIC_API_KEY"])
+@https_fn.on_call(timeout_sec=300, secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"])
 def suggest_companies(req: https_fn.CallableRequest) -> dict:
     if req.auth is None:
         raise https_fn.HttpsError(
@@ -257,7 +257,7 @@ def suggest_companies(req: https_fn.CallableRequest) -> dict:
     )
 
 
-@https_fn.on_call(timeout_sec=60, secrets=["ANTHROPIC_API_KEY"])
+@https_fn.on_call(timeout_sec=60, secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"])
 def expand_metro(req: https_fn.CallableRequest) -> dict:
     """Center + radius -> towns list for the Settings location field."""
     if req.auth is None:
@@ -276,7 +276,7 @@ def expand_metro(req: https_fn.CallableRequest) -> dict:
 # Track a company by name: resolve its ATS and register it automatically.
 # ---------------------------------------------------------------------------
 
-@https_fn.on_call(timeout_sec=120, secrets=["ANTHROPIC_API_KEY"])
+@https_fn.on_call(timeout_sec=120, secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"])
 def track_company(req: https_fn.CallableRequest) -> dict:
     if req.auth is None:
         raise https_fn.HttpsError(
@@ -294,7 +294,7 @@ def track_company(req: https_fn.CallableRequest) -> dict:
 # Manual drafting: with auto_draft off, the UI requests each letter.
 # ---------------------------------------------------------------------------
 
-@https_fn.on_call(timeout_sec=540, secrets=["ANTHROPIC_API_KEY"])
+@https_fn.on_call(timeout_sec=540, secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"])
 def request_draft(req: https_fn.CallableRequest) -> dict:
     if req.auth is None:
         raise https_fn.HttpsError(
@@ -331,7 +331,7 @@ def request_draft(req: https_fn.CallableRequest) -> dict:
 # the requesting user with the score gate bypassed — they chose it.
 # ---------------------------------------------------------------------------
 
-@https_fn.on_call(timeout_sec=300, secrets=["ANTHROPIC_API_KEY"])
+@https_fn.on_call(timeout_sec=300, secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"])
 def add_job_url(req: https_fn.CallableRequest) -> dict:
     if req.auth is None:
         raise https_fn.HttpsError(
@@ -371,7 +371,7 @@ def add_job_url(req: https_fn.CallableRequest) -> dict:
 # ---------------------------------------------------------------------------
 
 @storage_fn.on_object_finalized(bucket=STORAGE_BUCKET, region=STORAGE_REGION,
-                                timeout_sec=300, secrets=["ANTHROPIC_API_KEY"])
+                                timeout_sec=300, secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"])
 def on_resume_uploaded(event: storage_fn.CloudEvent[storage_fn.StorageObjectData]) -> None:
     from resume import process_resume_upload
     # Fires for every object in the default bucket; resume.py filters to
@@ -386,7 +386,7 @@ def on_resume_uploaded(event: storage_fn.CloudEvent[storage_fn.StorageObjectData
 
 @firestore_fn.on_document_written(
     document="users/{uid}", timeout_sec=120,
-    secrets=["ANTHROPIC_API_KEY"],
+    secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
 )
 def on_user_written(event: firestore_fn.Event) -> None:
     if event.data is None or event.data.after is None:
@@ -407,7 +407,7 @@ def on_user_written(event: firestore_fn.Event) -> None:
 
 @firestore_fn.on_document_written(
     document="users/{uid}/applications/{appId}", timeout_sec=540,
-    secrets=["ANTHROPIC_API_KEY"],
+    secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY"],
 )
 def on_application_written(event: firestore_fn.Event) -> None:
     if event.data is None or event.data.after is None:

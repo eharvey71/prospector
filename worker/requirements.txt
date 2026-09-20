@@ -5,4 +5,7 @@ google-cloud-firestore>=2.16
 google-cloud-storage>=2.16
 pydantic>=2.7
 anthropic>=0.40,<2
+# Bounded on purpose: an unbounded anthropic pin once pulled in a major
+# release that removed a parameter and broke every call.
+openai>=1.40,<3
 google-genai>=1.0
