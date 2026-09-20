@@ -32,7 +32,11 @@ from pydantic import BaseModel
 T = TypeVar("T", bound=BaseModel)
 
 PROVIDER = os.environ.get("LLM_PROVIDER", "anthropic")
-MODEL = os.environ.get("LLM_MODEL", "claude-sonnet-4-6")
+# Sonnet 5, not Sonnet 4.6: it is the newer mid-tier model AND cheaper
+# ($2/$10 per 1M input/output vs $3/$15), so staying on 4.6 was paying a
+# third more for the older model. Nothing sets LLM_MODEL, so this default
+# is what actually runs.
+MODEL = os.environ.get("LLM_MODEL", "claude-sonnet-5")
 
 # Hard daily ceiling on total tokens (input + output), enforced by
 # generate() against the health/llm_YYYYMMDD accounting doc. 0 disables.
@@ -178,11 +182,19 @@ def generate(
     temperature: float = 0.7,
     json_mode: bool = False,
     role: Optional[str] = None,
+    schema: Optional[dict] = None,
 ) -> str:
-    """Single-turn text generation. json_mode asks providers that support
-    it to guarantee syntactically valid JSON (others ignore it and lean on
-    the prompt plus the repair pass in generate_structured). role names the
-    call site so LLM_PROVIDER_<ROLE>/LLM_MODEL_<ROLE> can redirect it."""
+    """Single-turn text generation.
+
+    json_mode asks providers that support it to guarantee syntactically
+    valid JSON. schema goes further: providers that accept a JSON schema
+    are constrained to it, which removes the repair pass entirely — and
+    the repair pass is a whole second call, so on a cheap model that gets
+    JSON wrong often it was quietly undoing the saving. Providers that
+    take neither ignore both and lean on the prompt.
+
+    role names the call site so LLM_PROVIDER_<ROLE>/LLM_MODEL_<ROLE> can
+    redirect it."""
     if _over_budget():
         raise BudgetExceeded(
             f"daily LLM token budget ({DAILY_TOKEN_BUDGET}) exhausted; "
@@ -199,9 +211,10 @@ def generate(
             f"Unknown LLM provider {provider!r}"
             + (f" for role {role!r}" if role else ""))
     try:
-        text, tokens_in, tokens_out = fn(prompt, system, max_tokens,
-                                         temperature, json_mode, model,
-                                         effort_for(role))
+        text, tokens_in, tokens_out = fn(
+            prompt, system, max_tokens, temperature,
+            json_mode=json_mode, model=model, effort=effort_for(role),
+            schema=schema)
     except Exception as exc:
         _record_usage(0, 0, error=f"{type(exc).__name__}: {exc}",
                       model=model, role=role or "")
@@ -227,7 +240,8 @@ def generate_structured(
         + "No prose, no markdown fences.\n" + schema_json
     )
     raw = generate(prompt, system=full_system, max_tokens=max_tokens,
-                   temperature=0.2, json_mode=True, role=role)
+                   temperature=0.2, json_mode=True, role=role,
+                   schema=schema.model_json_schema())
     try:
         return schema.model_validate_json(_strip_fences(raw))
     except Exception:
@@ -260,7 +274,8 @@ _sdk_takes_temperature: Optional[bool] = None
 def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
                temperature: float, json_mode: bool = False,
                model: str = "",
-               effort: Optional[str] = None) -> tuple[str, int, int]:
+               effort: Optional[str] = None,
+               schema: Optional[dict] = None) -> tuple[str, int, int]:
     import anthropic
 
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
@@ -293,7 +308,8 @@ def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
 def _vertex(prompt: str, system: Optional[str], max_tokens: int,
             temperature: float, json_mode: bool = False,
             model: str = "",
-            effort: Optional[str] = None) -> tuple[str, int, int]:
+            effort: Optional[str] = None,
+            schema: Optional[dict] = None) -> tuple[str, int, int]:
     from google import genai
     from google.genai import types
 
@@ -349,6 +365,15 @@ def _adapt_shape(shape: dict[str, Any], msg: str) -> bool:
     if "reasoning" in msg and shape["effort"]:
         shape["effort"] = False
         changed = True
+    # Schema-constrained decoding is the newest of these and the least
+    # widely supported. Pydantic schemas also use $ref/$defs and optional
+    # fields, which some strict implementations refuse — either way, drop
+    # to plain JSON mode rather than failing the call.
+    if shape["json_schema"] and (
+            "json_schema" in msg or "response_format" in msg
+            or "additionalProperties" in msg or "strict" in msg):
+        shape["json_schema"] = False
+        changed = True
     return changed
 
 
@@ -361,7 +386,8 @@ def _usage(resp: Any) -> tuple[int, int]:
 def _openai(prompt: str, system: Optional[str], max_tokens: int,
             temperature: float, json_mode: bool = False,
             model: str = "",
-            effort: Optional[str] = None) -> tuple[str, int, int]:
+            effort: Optional[str] = None,
+            schema: Optional[dict] = None) -> tuple[str, int, int]:
     """OpenAI and any OpenAI-compatible endpoint.
 
     Env:
@@ -382,7 +408,7 @@ def _openai(prompt: str, system: Optional[str], max_tokens: int,
     shape = _openai_shapes.setdefault(
         f"{base_url or 'default'}|{model}",
         {"token_param": "max_completion_tokens",
-         "temperature": True, "effort": True})
+         "temperature": True, "effort": True, "json_schema": True})
 
     def once(cap: int):
         """One completion, adapting to whatever the endpoint refuses."""
@@ -394,7 +420,18 @@ def _openai(prompt: str, system: Optional[str], max_tokens: int,
             }
             if shape["temperature"]:
                 kwargs["temperature"] = temperature
-            if json_mode:
+            # Schema-constrained decoding where the endpoint supports it:
+            # the model then CANNOT emit invalid JSON, so the repair pass
+            # never fires. That pass is a second full call, which is what
+            # made a cheap-but-sloppy model stop being cheap. Endpoints
+            # that reject it fall back to plain JSON mode via the probe.
+            if schema and shape["json_schema"]:
+                kwargs["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {"name": "result", "schema": schema,
+                                    "strict": True},
+                }
+            elif json_mode:
                 kwargs["response_format"] = {"type": "json_object"}
             if effort and shape["effort"]:
                 kwargs["reasoning_effort"] = effort

@@ -70,8 +70,8 @@ def test_unknown_provider_names_the_role(monkeypatch):
 def test_generate_passes_resolved_model_to_provider(monkeypatch):
     seen = {}
 
-    def fake(prompt, system, max_tokens, temperature, json_mode, model,
-             effort):
+    def fake(prompt, system, max_tokens, temperature, json_mode=False,
+             model="", effort=None, schema=None):
         seen.update(model=model, effort=effort)
         return ("ok", 3, 4)
 
@@ -180,6 +180,42 @@ def test_json_mode_reaches_the_request(fake_openai, monkeypatch):
     monkeypatch.setattr(llm, "MODEL", "m")
     llm.generate("hi", json_mode=True)
     assert fake_openai.log[0]["response_format"] == {"type": "json_object"}
+
+
+def test_schema_constrains_decoding(fake_openai, monkeypatch):
+    monkeypatch.setattr(llm, "MODEL", "m")
+    llm.generate("hi", json_mode=True, schema={"type": "object"})
+    fmt = fake_openai.log[0]["response_format"]
+    assert fmt["type"] == "json_schema"
+    assert fmt["json_schema"]["schema"] == {"type": "object"}
+
+
+def test_schema_falls_back_to_json_mode_when_refused(fake_openai, monkeypatch):
+    """Pydantic schemas use $ref/$defs and optional fields; strict
+    implementations refuse them. Degrade, don't fail the call."""
+    fake_openai.rejects["m"] = ["response_format"]
+    monkeypatch.setattr(llm, "MODEL", "m")
+
+    # The fake rejects response_format outright, so both shapes fail and
+    # the call raises — what matters is that the probe TRIED to degrade.
+    with pytest.raises(RuntimeError):
+        llm.generate("hi", json_mode=True, schema={"type": "object"})
+    assert llm._openai_shapes["default|m"]["json_schema"] is False
+
+
+def test_structured_generation_sends_the_pydantic_schema(fake_openai,
+                                                         monkeypatch):
+    from pydantic import BaseModel
+
+    class Verdict(BaseModel):
+        ok: bool
+
+    monkeypatch.setattr(llm, "MODEL", "m")
+    monkeypatch.setattr(
+        llm, "generate",
+        lambda *a, **k: (fake_openai.log.append(k) or '{"ok": true}'))
+    llm.generate_structured("hi", Verdict)
+    assert fake_openai.log[0]["schema"]["properties"]["ok"]["type"] == "boolean"
 
 
 # --- effort ----------------------------------------------------------------
