@@ -91,7 +91,8 @@ def _safe_doc_id(text: str) -> str:
 
 
 def _record_usage(input_tokens: int, output_tokens: int,
-                  error: str | None = None, model: str = "") -> None:
+                  error: str | None = None, model: str = "",
+                  role: str = "") -> None:
     """Best-effort spend/error accounting into the global `health`
     collection (cumulative doc + per-day doc). The engine hit a provider
     spend cap once with zero visibility — never again. Must never break a
@@ -118,13 +119,18 @@ def _record_usage(input_tokens: int, output_tokens: int,
         _health_db.collection("health").document("llm").set(counters, merge=True)
         _health_db.collection("health").document(f"llm_{day}").set(
             counters, merge=True)
-        # Per model per day. The budget still counts the whole pipeline
-        # together (above); this doc is what makes two models running side
-        # by side comparable on cost and error rate.
-        if model:
-            _health_db.collection("health").document(
-                f"llm_{_safe_doc_id(model)}_{day}").set(
-                    {**counters, "model": model}, merge=True)
+        # Per model and per call site, per day. The budget still counts the
+        # whole pipeline together (above); these two break it down.
+        #
+        # Per model: makes two models running side by side comparable.
+        # Per role: answers the question that has to come FIRST — which
+        # call site is actually spending the money. Swapping a model to
+        # save money without this is guesswork.
+        for prefix, value in (("model", model), ("role", role)):
+            if value:
+                _health_db.collection("health").document(
+                    f"llm_{prefix}_{_safe_doc_id(value)}_{day}").set(
+                        {**counters, prefix: value}, merge=True)
     except Exception:
         log.debug("llm usage recording failed", exc_info=True)
 
@@ -197,9 +203,10 @@ def generate(
                                          temperature, json_mode, model,
                                          effort_for(role))
     except Exception as exc:
-        _record_usage(0, 0, error=f"{type(exc).__name__}: {exc}", model=model)
+        _record_usage(0, 0, error=f"{type(exc).__name__}: {exc}",
+                      model=model, role=role or "")
         raise
-    _record_usage(tokens_in, tokens_out, model=model)
+    _record_usage(tokens_in, tokens_out, model=model, role=role or "")
     return text
 
 

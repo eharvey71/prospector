@@ -86,6 +86,14 @@ firebase functions:secrets:set ANTHROPIC_API_KEY
 # old one. Spend is recorded per model per day in health/llm_<model>_<day>,
 # so the two are comparable; the daily budget still counts them together.
 #
+# Where the money goes, per day (read these BEFORE changing any model):
+#   health/llm_role_<role>_<YYYYMMDD>    spend per call site
+#   health/llm_model_<model>_<YYYYMMDD>  spend per model
+#   health/llm_<YYYYMMDD>                the pipeline total
+# Prefilter efficiency is per user in users/<uid>/stats/funnel: the
+# `prefiltered` vs `scored` counters say how many postings were rejected
+# for free versus how many cost an LLM call.
+#
 # LLM_EFFORT / LLM_EFFORT_<ROLE> set reasoning effort on the openai
 # provider. Published benchmarks for these models are quoted at a specific
 # effort and the settings differ a lot in both quality and latency, so pick

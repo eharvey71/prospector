@@ -223,8 +223,8 @@ def test_tight_cap_eaten_by_reasoning_is_retried(fake_openai, monkeypatch):
 def test_retry_bills_both_calls(fake_openai, monkeypatch):
     recorded = {}
     monkeypatch.setattr(llm, "_record_usage",
-                        lambda i, o, error=None, model="": recorded.update(
-                            input_tokens=i, output_tokens=o))
+                        lambda i, o, error=None, model="", role="":
+                        recorded.update(input_tokens=i, output_tokens=o))
     fake_openai.tuning["reasoning_cost"] = 900
     monkeypatch.setattr(llm, "MODEL", "thinker")
     monkeypatch.setattr(llm, "REASONING_FLOOR", 4000)
@@ -233,6 +233,31 @@ def test_retry_bills_both_calls(fake_openai, monkeypatch):
     # 11 prompt tokens twice; 300 burned on the dead call plus 7 on the
     # good one. A retry that hides its own cost defeats the accounting.
     assert recorded == {"input_tokens": 22, "output_tokens": 307}
+
+
+def test_spend_is_attributed_to_model_and_role(fake_openai, monkeypatch):
+    """Knowing which call site spends the money has to come before any
+    decision about which model to move."""
+    seen = {}
+    monkeypatch.setattr(llm, "_record_usage",
+                        lambda i, o, error=None, model="", role="":
+                        seen.update(model=model, role=role, tokens=(i, o)))
+    monkeypatch.setattr(llm, "MODEL", "m")
+    llm.generate("hi", role="matching")
+    assert seen == {"model": "m", "role": "matching", "tokens": (11, 7)}
+
+
+def test_failures_are_attributed_too(fake_openai, monkeypatch):
+    seen = {}
+    monkeypatch.setattr(llm, "_record_usage",
+                        lambda i, o, error=None, model="", role="":
+                        seen.update(model=model, role=role, error=error))
+    fake_openai.rejects["m"] = ["messages"]  # nothing the probe can fix
+    monkeypatch.setattr(llm, "MODEL", "m")
+    with pytest.raises(RuntimeError):
+        llm.generate("hi", role="judge")
+    assert seen["role"] == "judge" and seen["model"] == "m"
+    assert "messages" in seen["error"]
 
 
 def test_generous_cap_is_not_retried(fake_openai, monkeypatch):
