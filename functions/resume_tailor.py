@@ -79,7 +79,7 @@ def build_tailored_resume(uid: str, app_id: str, profile: UserProfile,
 
     tailored = generate_structured(
         _tailor_prompt(profile, posting), TailoredResume,
-        system=TAILOR_SYSTEM, max_tokens=3000,
+        system=TAILOR_SYSTEM, max_tokens=3000, role="resume_tailor",
     )
     tailored = _validate(tailored, profile)
     if tailored is None:

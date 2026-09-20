@@ -192,6 +192,7 @@ async def confirm_submission(page, *, title: str = "", company: str = ""
             SubmitVerdict,
             system=JUDGE_SYSTEM,
             max_tokens=300,
+            role="judge",
         )
     except Exception as exc:
         log.warning("submission judge unavailable: %s", exc)

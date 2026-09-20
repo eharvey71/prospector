@@ -126,6 +126,7 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
         system=DRAFT_SYSTEM,
         max_tokens=1200,
         temperature=0.8,
+        role="drafting",
     ).strip())
 
     # --- critique + one revision ---
@@ -133,6 +134,7 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
         _critique_prompt(profile, posting, letter_text),
         Critique,
         system=CRITIQUE_SYSTEM,
+        role="critique",
     )
     version = 1
     if not critique.passed:
@@ -141,11 +143,13 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
             system=DRAFT_SYSTEM,
             max_tokens=1200,
             temperature=0.5,
+            role="drafting",
         ).strip())
         critique = generate_structured(
             _critique_prompt(profile, posting, letter_text),
             Critique,
             system=CRITIQUE_SYSTEM,
+            role="critique",
         )
         version = 2
 
@@ -167,6 +171,7 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
             system=DRAFT_SYSTEM,
             max_tokens=1200,
             temperature=0.3,
+            role="drafting",
         ).strip())
         version += 1
         if wrong_employer(letter_text, posting, profile):
@@ -187,6 +192,7 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
                "give on an application form. Never invent facts. Skip any "
                "question whose answer isn't supported by the stated facts — "
                "an unanswered question is fine, a fabricated answer is not.",
+        role="screening_answers",
     )
 
     letter = Letter(
@@ -277,6 +283,7 @@ don't cover — no suggestion is better than a guess.""",
         system="You help a candidate finish a job application form by hand. "
                "Suggest answers only from the stated facts.",
         max_tokens=1500,
+        role="screening_answers",
     )
 
     by_field = {s.field.strip(): s.suggestion.strip()

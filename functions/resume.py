@@ -60,6 +60,7 @@ def process_resume_upload(db: firestore.Client, bucket_name: str, object_name: s
         ResumeExtraction,
         system=EXTRACT_SYSTEM,
         max_tokens=2000,
+        role="resume",
     )
 
     doc = extraction.model_dump(mode="json")

@@ -70,7 +70,42 @@ pip install -r requirements.txt ../shared
 
 # Secrets / config
 firebase functions:secrets:set ANTHROPIC_API_KEY
-# LLM_PROVIDER defaults to anthropic; set LLM_PROVIDER=vertex to use Gemini.
+# LLM_PROVIDER defaults to anthropic; vertex and openai are also supported.
+#   anthropic  ANTHROPIC_API_KEY
+#   vertex     GOOGLE_CLOUD_PROJECT [, VERTEX_LOCATION]
+#   openai     OPENAI_API_KEY [, OPENAI_BASE_URL for a compatible gateway]
+# LLM_MODEL is the provider's model id, verbatim.
+#
+# Per-call-site override, for trying a new model without moving the whole
+# pipeline onto it: LLM_PROVIDER_<ROLE> / LLM_MODEL_<ROLE> beat the globals
+# for that role alone. Roles are matching, drafting, critique,
+# screening_answers, synonyms, metro, discovery, track, suggest, extract,
+# resume, resume_tailor, judge, agent. e.g.
+#   LLM_PROVIDER_MATCHING=openai LLM_MODEL_MATCHING=<id>
+# scores postings on the new model while letters keep being written by the
+# old one. Spend is recorded per model per day in health/llm_<model>_<day>,
+# so the two are comparable; the daily budget still counts them together.
+#
+# Where the money goes, per day (read these BEFORE changing any model):
+#   health/llm_role_<role>_<YYYYMMDD>    spend per call site
+#   health/llm_model_<model>_<YYYYMMDD>  spend per model
+#   health/llm_<YYYYMMDD>                the pipeline total
+# Prefilter efficiency is per user in users/<uid>/stats/funnel: the
+# `prefiltered` vs `scored` counters say how many postings were rejected
+# for free versus how many cost an LLM call.
+#
+# LLM_EFFORT / LLM_EFFORT_<ROLE> set reasoning effort on the openai
+# provider. Published benchmarks for these models are quoted at a specific
+# effort and the settings differ a lot in both quality and latency, so pick
+# one deliberately. High effort can mean a very slow first token — fine for
+# batch scoring, bad for anything a user is waiting on.
+#
+# LLM_REASONING_FLOOR (default 4000): on a reasoning model the token cap
+# covers reasoning as well as visible output, so a call capped at 300 can
+# spend the lot on thinking and return an empty string with finish_reason
+# "length". Several call sites here are capped tight because the Claude
+# models only ever counted visible output. The openai provider detects
+# that case and retries once at this floor.
 
 firebase deploy --only functions
 ```

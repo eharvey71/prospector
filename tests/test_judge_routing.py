@@ -27,7 +27,8 @@ def stub_llm(result=None, exc=None, calls=None):
     """Install a fake `llm` module for confirm_submission's lazy import."""
     mod = types.ModuleType("llm")
 
-    def generate_structured(prompt, schema, *, system=None, max_tokens=2000):
+    def generate_structured(prompt, schema, *, system=None, max_tokens=2000,
+                            role=None):
         if calls is not None:
             calls.append(prompt)
         if exc:

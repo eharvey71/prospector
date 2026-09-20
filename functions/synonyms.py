@@ -65,6 +65,7 @@ def maybe_expand_titles(db: firestore.Client, uid: str, user_data: dict) -> None
         TitleSynonyms,
         system=SYSTEM,
         max_tokens=1200,
+        role="synonyms",
     )
     seen = {t.lower() for t in titles}
     synonyms = []

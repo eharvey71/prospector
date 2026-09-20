@@ -383,6 +383,7 @@ def _upsert_from_text(db, url: str, text: str,
         PostingFacts,
         system=EXTRACT_SYSTEM,
         max_tokens=300,
+        role="extract",
     )
     title = (facts.title or "").strip() or page_title or "(title not found)"
     # Backstop: if the extracted title is a bot-check message, the page was
