@@ -174,15 +174,21 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
             role="drafting",
         ).strip())
         version += 1
-        if wrong_employer(letter_text, posting, profile):
+        # Re-read it: the rewrite may have removed the first stray and left
+        # (or revealed) a different one. Reporting the ORIGINAL name sent a
+        # user hunting through writing samples for a company that was
+        # actually in their work history.
+        still = wrong_employer(letter_text, posting, profile)
+        if still:
             # Failing loudly beats handing someone a letter addressed to
             # the wrong company: the app stays in MATCHED, and the UI
             # reports why.
             raise ValueError(
-                f"the draft kept referring to {stray} instead of "
-                f"{posting.get('company')} — this usually means a past cover "
-                f"letter is saved in Profile > Writing samples; trim it to a "
-                f"paragraph or two of prose and try again")
+                f"the draft kept naming {still} instead of "
+                f"{posting.get('company')} — {still} appears in this "
+                f"profile's work history or writing samples. If a past "
+                f"cover letter is saved under Profile > Writing samples, "
+                f"trim it to a paragraph or two of prose and try again")
 
     # --- screening answers ---
     answers = generate_structured(

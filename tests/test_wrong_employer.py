@@ -69,3 +69,51 @@ def test_silent_when_the_posting_company_is_unusable():
     for company in ("unknown", "", "careerhq.asaecenter.org"):
         letter = "Elastic is a wonderful company."
         assert wrong_employer(letter, {"company": company}, profile()) is None
+
+
+# --- long institutional names ---------------------------------------------
+# Nobody writes "Virginia Commonwealth University School of Medicine" in a
+# sentence. Requiring the full string meant the escape hatch never opened
+# for these, and the writer's own job history became the stray — a real
+# user was blocked from a letter that was correct.
+
+LONG = {"company": "Virginia Commonwealth University School of Medicine",
+        "title": "Administrative Assistant"}
+
+ALUM = profile(work_history=[
+    WorkHistoryItem(company="Washington College", title="Grants Assistant",
+                    start="2022-06"),
+])
+
+
+def test_short_form_of_a_long_name_counts_as_naming_it():
+    letter = ("I am applying to VCU School of Medicine. My three years at "
+              "Washington College taught me to manage grant deadlines.")
+    assert wrong_employer(letter, LONG, ALUM) is None
+
+
+def test_parent_institution_counts_as_naming_it():
+    letter = ("Virginia Commonwealth University is where I want to do this "
+              "work. At Washington College I ran the grants calendar.")
+    assert wrong_employer(letter, LONG, ALUM) is None
+
+
+def test_long_name_still_catches_a_letter_about_the_old_employer():
+    letter = ("I am excited to apply for the coordinator role at Washington "
+              "College, where I would support the grants office.")
+    assert wrong_employer(letter, LONG, ALUM) == "Washington College"
+
+
+def test_trailing_generic_words_do_not_open_the_hatch():
+    # "School of Medicine" matches half of healthcare; only LEADING runs of
+    # the name count, or the hatch opens for letters about anywhere.
+    letter = ("I am applying to the School of Medicine. My years at "
+              "Washington College taught me to manage grant deadlines.")
+    assert wrong_employer(letter, LONG, ALUM) == "Washington College"
+
+
+def test_acronym_needs_a_word_boundary():
+    # Squashing the body would let "vcu" match inside an unrelated word.
+    letter = ("I am applying to this role. At Washington College I ran the "
+              "grants calendar, including VCUmanagement reporting.")
+    assert wrong_employer(letter, LONG, ALUM) == "Washington College"
