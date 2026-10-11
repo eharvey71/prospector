@@ -37,34 +37,47 @@ _NAMED_EMPLOYER = re.compile(
 _NOT_A_NAME = {"i", "my", "the", "a", "an", "this", "it", "we", "they",
                "his", "her", "their", "that", "these", "those"}
 
-# Joining words that carry no identity inside a company name.
-_FILLER = {"of", "the", "and", "for", "at", "a", "an"}
+# Words that carry no identity: joining words, and the vocabulary every
+# second institution shares. What's left is what makes a name that name.
+_GENERIC = {
+    "of", "the", "and", "for", "at", "a", "an", "inc", "llc", "ltd", "co",
+    "corp", "corporation", "company", "group", "holdings", "partners",
+    "university", "college", "school", "institute", "academy", "seminary",
+    "center", "centre", "hospital", "clinic", "health", "medical",
+    "medicine", "nursing", "dental", "sciences", "science", "arts",
+    "association", "society", "foundation", "council", "federation",
+    "national", "american", "international", "global", "united", "states",
+    "department", "division", "office", "bureau", "agency", "program",
+    "programs", "services", "solutions", "systems", "technologies",
+    "group", "team", "studio", "studios", "labs", "laboratory",
+}
 
 
-def company_aliases(company: str) -> tuple[set[str], set[str]]:
-    """How a letter might actually write this employer's name.
+def company_marks(company: str) -> tuple[set[str], set[str]]:
+    """What, in a letter, would show it is about THIS employer.
 
-    Returns (squashed_forms, acronyms). Long institutional names are the
-    reason this exists: nobody writes "Virginia Commonwealth University
-    School of Medicine" in a sentence — they write "Virginia Commonwealth
-    University" or "VCU". Demanding the full string meant the "right
-    employer is named" escape hatch below never opened for those, so any
-    past employer the letter legitimately mentioned tripped the guard.
+    Returns (distinctive_words, acronyms).
 
-    Only LEADING runs count. The distinctive part of a company name comes
-    first, and trailing runs are generic enough to open the hatch wrongly
-    ("School of Medicine" would match half the postings in healthcare).
+    Enumerating spellings does not work. "University of Colorado Boulder"
+    is written "CU Boulder" — not UCB, not any leading run of its own
+    words. So instead of guessing the form, this asks which WORDS only
+    that employer would put in a letter: drop the vocabulary every
+    institution shares and keep the rest. "Colorado", "Boulder". A letter
+    about anywhere else will not contain them.
+
+    Acronyms stay for names whose distinctive word is itself generic-ish
+    ("American Association for Justice" -> AAJ). Both are matched on word
+    boundaries against the raw letter, never the squashed body, where a
+    short token collides with the middle of unrelated words.
     """
-    words = [w for w in re.findall(r"[A-Za-z0-9&]+", company or "")
-             if w.lower() not in _FILLER]
-    forms = {_squash("".join(words[:n])) for n in range(2, len(words) + 1)}
-    # "VCU" for Virginia Commonwealth University. Matched with word
-    # boundaries against the raw letter, never against the squashed body,
-    # where three letters would collide with the inside of other words.
-    acronyms = {"".join(w[0] for w in words[:n]).upper()
-                for n in range(3, len(words) + 1)}
-    return ({f for f in forms if len(f) >= 6},
-            {a for a in acronyms if len(a) >= 3})
+    words = [w for w in re.findall(r"[A-Za-z0-9&]+", company or "")]
+    marks = {w.lower() for w in words
+             if w.lower() not in _GENERIC and len(w) >= 4}
+    significant = [w for w in words if w.lower() not in ("of", "the", "and",
+                                                        "for", "at", "a", "an")]
+    acronyms = {"".join(w[0] for w in significant[:n]).upper()
+                for n in range(2, len(significant) + 1)}
+    return marks, {a for a in acronyms if len(a) >= 3}
 
 
 def _candidates(phrase: str) -> list[str]:
@@ -104,11 +117,12 @@ def wrong_employer(letter: str, posting: dict, profile: UserProfile) -> str | No
     if not body or _squash(company) in body:
         return None            # the right employer is named: fine
 
-    # ...or named the way a person would write it. Without this, a letter
-    # correctly addressed to "VCU School of Medicine" counted as naming
-    # nobody, and the writer's own job history became the stray.
-    forms, acronyms = company_aliases(company)
-    if any(f in body for f in forms):
+    # ...or carries a word only this employer would put in a letter.
+    # Without this, a letter correctly addressed to "VCU School of
+    # Medicine" or "CU Boulder" counted as naming nobody, and the writer's
+    # own job history became the stray.
+    marks, acronyms = company_marks(company)
+    if any(re.search(rf"\b{re.escape(m)}\b", letter, re.I) for m in marks):
         return None
     if any(re.search(rf"\b{re.escape(a)}\b", letter) for a in acronyms):
         return None

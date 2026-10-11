@@ -190,6 +190,18 @@ def draft_application(db: firestore.Client, uid: str, app_id: str) -> None:
                 f"cover letter is saved under Profile > Writing samples, "
                 f"trim it to a paragraph or two of prose and try again")
 
+    # --- cut-off backstop ---
+    # A letter that stops mid-sentence looks like a finished draft in the
+    # review box, so nothing else catches it. One reached a real user when
+    # the model's own thinking ate the token budget. Refuse instead: the
+    # app stays in MATCHED and asking again costs one call.
+    if not letter_text.rstrip().endswith((".", "!", "?", '"', "'", ")")):
+        log.warning("uid=%s app=%s letter ends mid-sentence (%d chars)",
+                    uid, app_id, len(letter_text))
+        raise ValueError(
+            "the draft came back cut off mid-sentence — this is usually a "
+            "transient model hiccup; try writing the letter again")
+
     # --- screening answers ---
     answers = generate_structured(
         _answers_prompt(profile, posting),

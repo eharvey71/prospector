@@ -301,3 +301,70 @@ def test_generous_cap_is_not_retried(fake_openai, monkeypatch):
     monkeypatch.setattr(llm, "MODEL", "thinker")
     llm.generate("hi", max_tokens=3000)
     assert len(fake_openai.log) == 1
+
+
+# --- anthropic: thinking off by default -----------------------------------
+# The newer models think when `thinking` is omitted, and thinking tokens
+# come out of max_tokens. Moving the default model therefore truncated
+# cover letters mid-sentence. Every prompt here was tuned without it.
+
+class _FakeMessages:
+    def __init__(self, log, reject_thinking=False, stop_reason="end_turn"):
+        self._log, self._reject = log, reject_thinking
+        self._stop = stop_reason
+
+    def create(self, **kwargs):
+        self._log.append(kwargs)
+        if self._reject and "thinking" in kwargs:
+            raise RuntimeError("thinking: unsupported parameter for this model")
+        return types.SimpleNamespace(
+            content=[types.SimpleNamespace(type="text", text="letter")],
+            stop_reason=self._stop,
+            usage=types.SimpleNamespace(input_tokens=5, output_tokens=6))
+
+
+@pytest.fixture
+def fake_anthropic(monkeypatch):
+    state = {"reject_thinking": False, "stop_reason": "end_turn"}
+    log = []
+
+    class FakeClient:
+        def __init__(self, *a, **k):
+            self.messages = _FakeMessages(log, state["reject_thinking"],
+                                          state["stop_reason"])
+
+    monkeypatch.setitem(sys.modules, "anthropic",
+                        types.SimpleNamespace(Anthropic=FakeClient))
+    monkeypatch.setattr(llm, "_anthropic_shapes", {})
+    monkeypatch.setattr(llm, "_sdk_takes_temperature", False)
+    monkeypatch.setattr(llm, "PROVIDER", "anthropic")
+    monkeypatch.setattr(llm, "MODEL", "m")
+    return types.SimpleNamespace(log=log, state=state)
+
+
+def test_thinking_is_turned_off(fake_anthropic):
+    llm.generate("hi")
+    assert fake_anthropic.log[0]["thinking"] == {"type": "disabled"}
+
+
+def test_thinking_param_dropped_when_model_refuses(fake_anthropic):
+    fake_anthropic.state["reject_thinking"] = True
+    assert llm.generate("hi") == "letter"
+    assert "thinking" in fake_anthropic.log[0]      # tried
+    assert "thinking" not in fake_anthropic.log[1]  # retried without it
+
+
+def test_refusal_is_remembered_per_model(fake_anthropic):
+    fake_anthropic.state["reject_thinking"] = True
+    llm.generate("hi")
+    fake_anthropic.log.clear()
+    llm.generate("again")
+    assert len(fake_anthropic.log) == 1
+    assert "thinking" not in fake_anthropic.log[0]
+
+
+def test_truncation_is_logged(fake_anthropic, caplog):
+    fake_anthropic.state["stop_reason"] = "max_tokens"
+    with caplog.at_level("WARNING", logger="llm"):
+        llm.generate("hi", max_tokens=1200)
+    assert "truncated" in caplog.text

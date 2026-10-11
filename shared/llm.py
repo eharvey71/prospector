@@ -270,6 +270,10 @@ def _strip_fences(text: str) -> str:
 
 _sdk_takes_temperature: Optional[bool] = None
 
+# Per model: whether this endpoint accepts thinking being turned off.
+# Probed from its own rejection, like the openai argument shape.
+_anthropic_shapes: dict[str, dict[str, Any]] = {}
+
 
 def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
                temperature: float, json_mode: bool = False,
@@ -297,8 +301,35 @@ def _anthropic(prompt: str, system: Optional[str], max_tokens: int,
         kwargs["temperature"] = temperature
     if system:
         kwargs["system"] = system
-    resp = client.messages.create(**kwargs)
+
+    # Thinking OFF unless asked for. On the newer models it is ON when the
+    # parameter is omitted, and thinking tokens come out of max_tokens —
+    # so moving the default model silently turned a 1200-token cover
+    # letter into a few hundred tokens of letter and the rest of the
+    # budget spent thinking. The letters came back cut off mid-sentence.
+    # Every prompt here was written and tuned without it.
+    shape = _anthropic_shapes.setdefault(kwargs["model"], {"thinking": True})
+    if shape["thinking"]:
+        kwargs["thinking"] = {"type": "disabled"}
+    try:
+        resp = client.messages.create(**kwargs)
+    except Exception as exc:
+        # Models that predate the parameter reject it; so does any model
+        # that refuses to turn thinking off. Drop it and carry on.
+        if shape["thinking"] and "thinking" in str(exc).lower():
+            shape["thinking"] = False
+            kwargs.pop("thinking", None)
+            resp = client.messages.create(**kwargs)
+        else:
+            raise
+
     text = "".join(block.text for block in resp.content if block.type == "text")
+    # A cut-off answer is worse than a failed one: the caller cannot tell,
+    # and a half-written cover letter reached a real user this way.
+    if getattr(resp, "stop_reason", "") == "max_tokens":
+        log.warning("truncated completion from %s at max_tokens=%d "
+                    "(thinking_off=%s) — raise the cap for this call site",
+                    kwargs["model"], max_tokens, shape["thinking"])
     usage = getattr(resp, "usage", None)
     return (text,
             getattr(usage, "input_tokens", 0) or 0,
