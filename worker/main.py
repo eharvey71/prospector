@@ -113,13 +113,22 @@ async def submit(request: Request) -> dict:
         raise HTTPException(status_code=500, detail="retry")  # Cloud Tasks retries
 
     if outcome.success:
+        # Record WHAT convinced us, not just that we were convinced.
+        # "submitted" is an inference from the page the site showed after
+        # the click — a confirmation URL, a confirmation phrase, or the
+        # judge's reading of it. Those are not equally strong, and with
+        # only "confirmed by adapter" on the record there is no way to
+        # tell afterwards which one carried an application. The employer's
+        # own confirmation email remains the only actual proof.
+        evidence = outcome.reason or "confirmed by adapter"
         advance(db, task.uid, task.app_id, AppState.SUBMITTING, AppState.SUBMITTED,
-                note="confirmed by adapter",
+                note=f"confirmed: {evidence}",
                 extra_fields={
                     "submission.tier": outcome.tier,
                     "submission.attempts": attempts,
                     "submission.screenshots": outcome.screenshots,
                     "submission.confirmedAt": datetime.now(timezone.utc),
+                    "submission.evidence": evidence,
                     "submission.error": None,
                 })
         return {"status": "submitted"}
