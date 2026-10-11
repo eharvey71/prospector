@@ -95,6 +95,8 @@ export default function AdminPage() {
   const [jobUid, setJobUid] = useState("");
   const [addingJob, setAddingJob] = useState(false);
   const [addStatus, setAddStatus] = useState("");
+  const [jobText, setJobText] = useState("");     // pasted posting body
+  const [showPaste, setShowPaste] = useState(false);
   const [matches, setMatches] = useState({});     // uid -> [{...app, posting}]
 
   async function addJobFor() {
@@ -107,13 +109,21 @@ export default function AdminPage() {
     setAddStatus("");
     try {
       const call = httpsCallable(functions, "add_job_url", { timeout: 300_000 });
-      const res = await call({ url, uid: jobUid });
+      const res = await call({ url, uid: jobUid, text: jobText.trim() });
       const who = users.find((u) => u.uid === jobUid);
       setAddStatus(`Added "${res.data.title}" @ ${res.data.company} to `
         + `${who?.name || "the user"}'s queue.`);
       setJobUrl("");
+      setJobText("");
+      setShowPaste(false);
     } catch (e) {
       setAddStatus(`Couldn't add it: ${e.message}`);
+      // The sites that block a server read never stop blocking it, so
+      // retrying the URL is pointless — open the paste box instead, which
+      // is the only route that works for these.
+      if (/blocks automated reads|bot-check|couldn't open|403|429/i.test(e.message)) {
+        setShowPaste(true);
+      }
     } finally {
       setAddingJob(false);
     }
@@ -209,9 +219,35 @@ export default function AdminPage() {
           <input style={input} value={jobUrl} placeholder="https://…"
                  onChange={(e) => setJobUrl(e.target.value)}
                  onKeyDown={(e) => e.key === "Enter" && addJobFor()} />
+          {/* The way in for sites the engine is not allowed to read.
+              LinkedIn blocks cloud IPs and Easy Apply listings have no
+              employer URL to fall back to, so the only thing left is the
+              posting the admin already has open in front of them. */}
+          {showPaste ? (
+            <>
+              <span style={labelStyle}>
+                Posting text — select the whole job description in your
+                browser, copy, and paste it here
+              </span>
+              <textarea style={{ ...input, minHeight: 180, fontFamily: "inherit" }}
+                        value={jobText} placeholder="Paste the job description…"
+                        onChange={(e) => setJobText(e.target.value)} />
+              <p className="hint" style={{ marginTop: -6, marginBottom: 10 }}>
+                The URL above is still saved so the posting opens normally.
+                Nothing is fetched.
+              </p>
+            </>
+          ) : (
+            <p className="hint" style={{ marginTop: -6, marginBottom: 10 }}>
+              <a href="#" onClick={(e) => { e.preventDefault(); setShowPaste(true); }}>
+                Site blocking the engine? Paste the posting text instead
+              </a>
+            </p>
+          )}
           <button className="btn-primary" disabled={addingJob} onClick={addJobFor}>
             {addingJob
-              ? <><span className="spinner sm" />Reading the posting…</>
+              ? <><span className="spinner sm" />
+                  {jobText.trim() ? "Reading what you pasted…" : "Reading the posting…"}</>
               : "Add to their queue"}
           </button>
           {addStatus && (

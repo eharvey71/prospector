@@ -359,10 +359,17 @@ def add_job_url(req: https_fn.CallableRequest) -> dict:
             "only an admin can add a job for another user")
 
     from matching import match_posting_for_user
-    from urljob import create_posting_from_url
+    from urljob import create_posting_from_text, create_posting_from_url
     db = _db()
+    # Pasted text wins over fetching. Some sites (LinkedIn above all) block
+    # reads from cloud IPs, and an Easy Apply listing has no employer URL
+    # to fall back to — but whoever is looking at the posting can paste it.
+    pasted = ((req.data or {}).get("text") or "").strip()
     try:
-        posting_id, posting = create_posting_from_url(db, url)
+        if pasted:
+            posting_id, posting = create_posting_from_text(db, url, pasted)
+        else:
+            posting_id, posting = create_posting_from_url(db, url)
     except ValueError as exc:
         raise https_fn.HttpsError(
             https_fn.FunctionsErrorCode.FAILED_PRECONDITION, str(exc))

@@ -245,33 +245,14 @@ def _fetch_hint(url: str, exc: Exception) -> str:
     return f"could not fetch that URL: {exc}"
 
 
-BOT_WALL_RX = re.compile(
-    r"confirm you are (not a robot|a human)|are you a human"
-    r"|verify (you are|you're) (human|not a robot)"
-    r"|checking your browser|just a moment"
-    r"|enable javascript( and cookies)? to continue"
-    r"|access denied|request (blocked|unsuccessful)"
-    r"|unusual traffic|\bcaptcha\b|cf-ray|cloudflare ray id", re.I)
+# Bot-wall and pasted-text rules live in posting_text.py so they can be
+# tested without dragging in Firestore. Re-exported here because this
+# module is where callers already look for them.
+from posting_text import (  # noqa: E402,F401
+    BOT_WALL_RX, MIN_PASTED_CHARS, check_pasted, is_bot_wall,
+    is_wall_title)
 
-# A wall LEADS with its message, so the opening of the page is the
-# reliable signal — some sites wrap the wall in their full nav and footer,
-# which defeats a page-length test. A posting that merely mentions
-# "captcha" deep in its text still goes through.
-BOT_WALL_HEAD_CHARS = 600
-BOT_WALL_MAX_CHARS = 1200
-
-
-def _is_bot_wall(text: str) -> bool:
-    if BOT_WALL_RX.search(text[:BOT_WALL_HEAD_CHARS]):
-        return True
-    return len(text) < BOT_WALL_MAX_CHARS and bool(BOT_WALL_RX.search(text))
-
-
-def is_wall_title(title: str) -> bool:
-    """Last line of defence, applied to the EXTRACTED title. Whatever the
-    page heuristics miss shows up here: a posting called "Please click to
-    confirm you are not a robot" is never a real job."""
-    return bool(BOT_WALL_RX.search(title or ""))
+_is_bot_wall = is_bot_wall
 
 
 def _infer_source(url: str) -> AtsType:
@@ -283,6 +264,19 @@ def _infer_source(url: str) -> AtsType:
     if "lever.co" in host:
         return AtsType.LEVER
     return AtsType.UNKNOWN
+
+
+def create_posting_from_text(db, url: str, text: str) -> tuple[str, dict]:
+    """Build a posting from text the human pasted, with no fetch at all.
+
+    The escape hatch for every site the engine cannot read: LinkedIn
+    blocks cloud IPs outright, bot walls serve a challenge instead of the
+    page, and Easy Apply listings have no employer URL to fall back to.
+    None of that matters if the person who can already see the posting in
+    their browser pastes it. The URL is still stored so the posting is
+    deduplicated and openable, it is just never fetched.
+    """
+    return _upsert_from_text(db, expand_short_link(url), check_pasted(text))
 
 
 def create_posting_from_url(db, url: str) -> tuple[str, dict]:
