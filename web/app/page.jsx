@@ -50,7 +50,8 @@ function MatchInsight({ app, threshold, queue }) {
     + (queue === "matched" ? " Auto-draft is off, so no letter is written until you ask." : "");
 
   const nextStep = queue === "review"
-    ? "Edit the letter below (saves when you click away), then Approve or Reject."
+    ? "Edit the letter below (saves when you click away). Approving opens "
+      + "the posting with the extension ready to fill it."
     : blockers.length > 0
       ? "A cover letter can't fix a blocker — Skip unless the flag is wrong."
       : score < threshold
@@ -448,6 +449,15 @@ export default function ReviewQueue() {
     });
   }
 
+  // Approve, then arm the extension and open the posting. The approval is
+  // what matters and is awaited; the handoff is best-effort, because an
+  // approved application must not hinge on the extension being installed.
+  async function approveAndOpen(a) {
+    await transition(a.id, "approved", "approved in review UI");
+    setTab("needs_you");
+    openWithAutofill(a);
+  }
+
   async function saveLetter(appId, text) {
     const ref = doc(db, "users", user.uid, "applications", appId);
     await updateDoc(ref, { "letter.text": text, updatedAt: serverTimestamp() });
@@ -588,11 +598,16 @@ export default function ReviewQueue() {
     { key: "matches", label: "Matches", count: matches.length, urgent: true,
       blurb: "Scored above your bar but no letter yet. Pick which ones get one." },
     { key: "review", label: "Review", count: apps.length, urgent: true,
-      blurb: "Drafted letters waiting for your approval. Nothing is submitted until you approve it here." },
-    { key: "needs_you", label: "Needs you", count: escalated.length, urgent: true,
-      blurb: "The engine got stuck mid-submission. Finish these by hand — answers are prepared." },
-    { key: "inflight", label: "In flight", count: inflight.length,
-      blurb: "Approved applications the engine is submitting right now." },
+      blurb: "Drafted letters waiting on you. Approving opens the posting with the extension armed." },
+    { key: "needs_you", label: "Ready to apply", count: escalated.length, urgent: true,
+      blurb: "Approved and prepared. Open each one, let the extension fill it, submit, then mark it done." },
+    // Only when there IS something in flight. With AUTO_SUBMIT off nothing
+    // reaches queued/submitting, and a tab that is permanently 0 is noise —
+    // but the subscription stays, so turning auto-submit back on makes the
+    // tab reappear rather than hiding those applications.
+    ...(inflight.length ? [{ key: "inflight", label: "In flight",
+        count: inflight.length,
+        blurb: "The engine is submitting these right now." }] : []),
     { key: "done", label: "Done", count: done.length,
       blurb: "Submitted, failed, or skipped by you. Skips can be brought back." },
   ];
@@ -728,9 +743,13 @@ export default function ReviewQueue() {
               <textarea className="letter" defaultValue={a.letter?.text || ""}
                         onBlur={(e) => saveLetter(a.id, e.target.value)} />
               <div className="actions">
+                {/* One click, three things. Approving used to drop the card
+                    into another tab for the user to find, open and arm by
+                    hand; the engine no longer submits anything, so those
+                    three steps had no reason to be separate. */}
                 <button className="btn-primary"
-                        onClick={() => transition(a.id, "approved", "approved in review UI")}>
-                  Approve &amp; submit
+                        onClick={() => approveAndOpen(a)}>
+                  Approve &amp; open ↗
                 </button>
                 <button className="btn"
                         onClick={() => transition(a.id, "rejected", "rejected in review UI")}>
@@ -744,14 +763,20 @@ export default function ReviewQueue() {
 
       {tab === "needs_you" && (
         <>
-          {escalated.length === 0 && <p className="empty">No escalations.</p>}
+          {escalated.length === 0 &&
+            <p className="empty">Nothing waiting. Approve a letter in Review to queue one up.</p>}
           {escalated.map((a) => (
             <Row key={a.id} a={a}
-                 right={<span className="pill warn">needs you</span>}>
-              <p style={{ margin: "10px 0 6px" }}>
-                <strong style={{ color: "var(--warn)" }}>Why: </strong>
-                {a.submission?.error || "escalated"}
-              </p>
+                 right={<span className="pill warn">ready</span>}>
+              {/* An error here means the engine tried and stopped, which
+                  only happens with AUTO_SUBMIT on. Normally there is none
+                  and the row needs no explanation. */}
+              {a.submission?.error && (
+                <p style={{ margin: "10px 0 6px" }}>
+                  <strong style={{ color: "var(--warn)" }}>Why: </strong>
+                  {a.submission.error}
+                </p>
+              )}
               {/* Open & autofill now lives on every row (see Row), so the
                   dedicated button here would be a duplicate. */}
               <FillSheet sheet={a.submission?.fill_sheet} />
@@ -840,9 +865,9 @@ export default function ReviewQueue() {
         </>
       )}
 
+
       {tab === "inflight" && (
         <>
-          {inflight.length === 0 && <p className="empty">Nothing in flight.</p>}
           {inflight.map((a) => (
             <Row key={a.id} a={a} expandable={false}
                  right={
