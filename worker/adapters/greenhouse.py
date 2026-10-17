@@ -181,7 +181,8 @@ class GreenhouseAdapter(SubmissionAdapter):
 
                 if verdict == "submitted":
                     return SubmissionOutcome(success=True, tier=self.tier,
-                                             clicked_submit=True, screenshots=shots)
+                                             reason=why, clicked_submit=True,
+                                             screenshots=shots)
                 # Either verdict below escalates: clicked_submit stops the
                 # worker retrying (which would file the application a second
                 # time) — a human verifies instead. "not_submitted" gets its

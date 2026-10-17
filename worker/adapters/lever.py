@@ -202,7 +202,8 @@ class LeverAdapter(SubmissionAdapter):
 
                 if verdict == "submitted":
                     return SubmissionOutcome(success=True, tier=self.tier,
-                                             clicked_submit=True, screenshots=shots)
+                                             reason=why, clicked_submit=True,
+                                             screenshots=shots)
                 # Both remaining verdicts escalate — clicked_submit blocks any
                 # retry — but with wording matched to the fix the human makes.
                 if verdict == "not_submitted":

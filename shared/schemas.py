@@ -39,7 +39,10 @@ ENGINE_TRANSITIONS: dict[AppState, set[AppState]] = {
     AppState.DISCOVERED: {AppState.MATCHED, AppState.REJECTED},
     AppState.MATCHED: {AppState.DRAFTED, AppState.FAILED},
     AppState.DRAFTED: {AppState.IN_REVIEW},
-    AppState.APPROVED: {AppState.QUEUED},
+    # NEEDS_HUMAN here is the AUTO_SUBMIT=false path: approval hands the
+    # application straight to the person with its answers prepared,
+    # without the worker ever driving a browser.
+    AppState.APPROVED: {AppState.QUEUED, AppState.NEEDS_HUMAN},
     AppState.QUEUED: {AppState.SUBMITTING},
     # QUEUED here is the retry rollback: the worker returns a retryable
     # failure and re-arms the idempotency gate for the redelivered task.

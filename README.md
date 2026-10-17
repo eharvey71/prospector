@@ -202,3 +202,28 @@ Many job boards prohibit automated submissions. This system is built around a
 human approving every application, per-domain rate limits, dry-run defaults,
 and escalation over guessing — use it accordingly, on boards where you're
 comfortable, applying as yourself.
+
+### Autonomous submission (off)
+
+`AUTO_SUBMIT` is `false` by default. Approving an application moves it to
+`needs_human` with its answers prepared, and the person finishes it in
+their own browser with the extension.
+
+It is off because across three users it never once carried an
+application end to end. Driving someone else's application form from a
+cloud IP loses to the anti-bot stack more often than it wins — the same
+blocking that stops the engine reading a LinkedIn posting also serves
+the worker a challenge page instead of a form, which is why the
+escalations said "no form controls found on page".
+
+Nothing was deleted. The worker, both deterministic adapters and the
+agentic tier are intact and tested. To put it back:
+
+```bash
+# functions
+AUTO_SUBMIT=true            # in functions/.env, then redeploy
+# worker (only needed if it was scaled to zero)
+gcloud run services update job-engine-worker --region us-central1
+```
+
+`SUBMIT_DRY_RUN` on the worker is unchanged and still gates real clicks.

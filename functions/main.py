@@ -52,6 +52,10 @@ QUEUE_LOCATION = os.environ.get("TASKS_LOCATION", "us-central1")
 QUEUE_NAME = os.environ.get("TASKS_QUEUE", "submissions")
 WORKER_URL = os.environ.get("WORKER_URL", "")  # Cloud Run URL, set after deploy
 WORKER_SA = os.environ.get("WORKER_INVOKER_SA", "")  # service account email
+
+# Autonomous submission. Off by default — see _enqueue_submission().
+AUTO_SUBMIT = os.environ.get("AUTO_SUBMIT", "false").strip().lower() in (
+    "1", "true", "yes", "on")
 # Default bucket for resume uploads — same value the web app uses
 # (NEXT_PUBLIC_FB_STORAGE_BUCKET). Set in .env; when unset, falls back to the
 # SDK resolving it from FIREBASE_CONFIG, which is absent in local imports and
@@ -486,6 +490,26 @@ def _enqueue_submission(uid: str, app_id: str, app_data: dict) -> None:
     posting = db.collection("jobPostings").document(app_data["posting_id"]).get().to_dict()
     if posting is None:
         return
+
+    # Autonomous submission is OFF by default. Across three users it never
+    # once carried an application end to end: driving someone else's
+    # application form from a cloud IP loses to the anti-bot stack more
+    # often than it wins, and the escalation path — the person finishing
+    # it in their own browser with the extension, everything pre-filled —
+    # is what has actually been filing applications.
+    #
+    # Nothing is deleted. The worker, the adapters and the whole Tier 1/2
+    # path are intact; this hands approval straight to the human instead
+    # of to a Cloud Task. Set AUTO_SUBMIT=true to put it back.
+    if not AUTO_SUBMIT:
+        advance(db, uid, app_id, AppState.APPROVED, AppState.NEEDS_HUMAN,
+                note="ready to submit — open it and use the extension",
+                extra_fields={"submission.tier": 3,
+                              "submission.attempts": 0,
+                              "submission.error": None})
+        log.info("auto-submit off; app %s handed to the human", app_id)
+        return
+
     if not WORKER_URL:
         log.warning("WORKER_URL not set; leaving app %s in approved", app_id)
         return
