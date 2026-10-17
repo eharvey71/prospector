@@ -44,3 +44,14 @@ def test_no_skipping_review():
                   AppState.IN_REVIEW):
         assert not transition_allowed(state, AppState.QUEUED)
         assert not transition_allowed(state, AppState.SUBMITTING)
+
+
+def test_approval_may_go_straight_to_the_human():
+    # AUTO_SUBMIT=false: approval hands the application to the person with
+    # its answers prepared, without the worker driving a browser at all.
+    assert transition_allowed(AppState.APPROVED, AppState.NEEDS_HUMAN)
+
+
+def test_approval_can_still_be_queued_for_the_worker():
+    # Turning auto-submit back on must not need a schema change.
+    assert transition_allowed(AppState.APPROVED, AppState.QUEUED)

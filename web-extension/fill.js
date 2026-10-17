@@ -427,13 +427,15 @@
   const P = { bg: "#1d2026", alt: "#23262d", border: "#2f343c", text: "#e2e4e9",
               muted: "#9aa1ad", accent: "#6f9ff3", warn: "#e0b34c" };
   let panel = null;
+  let host = null;   // shadow host in the page; the panel lives inside it
   let keepAlive = null;
   let resetForNewPage = () => {};   // rebound by showPanel
 
   function dismiss({ stopFollowing = false } = {}) {
     clearInterval(keepAlive);
     keepAlive = null;
-    panel?.remove();
+    host?.remove();
+    host = null;
     panel = null;
     // Closing the panel is a decision, not a blink: without this the next
     // navigation in a followed tab summons it straight back.
@@ -467,7 +469,21 @@
   function showPanel(pending, kitOnly = false) {
     dismiss();   // a fresh summon always rebuilds
 
+    // The panel lives in a shadow root. A page's CSS cannot select into
+    // one, and `all: initial` on the host stops inherited properties
+    // (font, line-height, color) crossing the boundary — the panel used
+    // to pick up whatever a site did to bare <div>s, and one site that
+    // zeroes line-height collapsed every label on top of its value.
+    host = document.createElement("div");
+    host.style.cssText = "all: initial";
+    const shadow = host.attachShadow({ mode: "open" });
+    const isolate = document.createElement("style");
+    isolate.textContent = ":host{all:initial}*{box-sizing:border-box;"
+      + "margin:0;padding:0;font:inherit;color:inherit;line-height:inherit}";
+    shadow.append(isolate);
+
     panel = document.createElement("div");
+    shadow.append(panel);
     panel.style.cssText = `position:fixed;top:16px;right:16px;width:320px;max-height:80vh;
       overflow-y:auto;z-index:2147483647;background:${P.bg};color:${P.text};
       border:1px solid ${P.border};border-radius:10px;padding:14px;
@@ -480,8 +496,8 @@
     // about a form that is no longer on screen.
     let lastUrl = location.href;
     keepAlive = setInterval(() => {
-      if (panel && !document.documentElement.contains(panel)) {
-        (document.body || document.documentElement).append(panel);
+      if (host && !document.documentElement.contains(host)) {
+        (document.body || document.documentElement).append(host);
       }
       if (panel && location.href !== lastUrl) {
         lastUrl = location.href;
@@ -664,7 +680,7 @@
     clear.onclick = () => chrome.runtime.sendMessage({ kind: "clear" }, dismiss);
     panel.append(clear);
 
-    (document.body || document.documentElement).append(panel);
+    (document.body || document.documentElement).append(host);
     // Ask the background to keep showing the panel as this tab navigates:
     // "Apply now" usually leaves the job's own domain, and the automatic
     // appearance below can't match a domain it has never heard of.
