@@ -61,3 +61,51 @@ def test_a_posting_that_merely_mentions_captcha_is_fine():
 def test_wall_title_still_catches_an_extracted_title():
     assert is_wall_title("Please click to confirm you are not a robot")
     assert not is_wall_title("Editorial Assistant")
+
+
+# --- does the posting ask for a cover letter? -----------------------------
+# Advisory only: it says what the posting SAYS, so the person can decide
+# whether a draft is worth paying for. A regex, not an LLM field, because
+# crawled postings never reach the extraction step and that is where
+# nearly all the volume is.
+
+from posting_text import cover_letter_signal  # noqa: E402
+
+
+@pytest.mark.parametrize("text", [
+    "Please submit a resume and cover letter through our portal.",
+    "A cover letter is required for consideration.",
+    "Applicants must include a cover letter describing their interest.",
+    "Cover letter and resume required.",
+])
+def test_required_phrasings(text):
+    assert cover_letter_signal(text) == "required"
+
+
+@pytest.mark.parametrize("text", [
+    "A cover letter is optional but encouraged.",
+    "You may also attach a cover letter.",
+    "Cover letters are welcome.",
+])
+def test_optional_phrasings(text):
+    assert cover_letter_signal(text) == "optional"
+
+
+@pytest.mark.parametrize("text", [
+    "A cover letter is not required for this role.",
+    "Please do not submit a cover letter.",
+    "No cover letter necessary.",
+    "Resumes only, please.",
+])
+def test_not_wanted_phrasings(text):
+    assert cover_letter_signal(text) == "not_wanted"
+
+
+def test_negation_beats_the_requirement_phrasing():
+    # "is not required" contains "required" — order of the checks matters.
+    assert cover_letter_signal("A cover letter is not required.") == "not_wanted"
+
+
+def test_silence_is_reported_as_silence():
+    assert cover_letter_signal(REAL) == "unstated"
+    assert cover_letter_signal("") == "unstated"

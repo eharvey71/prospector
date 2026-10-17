@@ -249,8 +249,8 @@ def _fetch_hint(url: str, exc: Exception) -> str:
 # tested without dragging in Firestore. Re-exported here because this
 # module is where callers already look for them.
 from posting_text import (  # noqa: E402,F401
-    BOT_WALL_RX, MIN_PASTED_CHARS, check_pasted, is_bot_wall,
-    is_wall_title)
+    BOT_WALL_RX, MIN_PASTED_CHARS, check_pasted, cover_letter_signal,
+    is_bot_wall, is_wall_title)
 
 _is_bot_wall = is_bot_wall
 
@@ -363,6 +363,7 @@ def _upsert(db, url: str, *, company: str, title: str,
         description_text=text,
     )
     doc = posting.model_dump(mode="json")
+    doc["cover_letter"] = cover_letter_signal(text)
     db.collection("jobPostings").document(posting.posting_id).set(doc, merge=True)
     log.info("user-added posting %s: %s @ %s", posting.posting_id, title, company)
     return posting.posting_id, doc

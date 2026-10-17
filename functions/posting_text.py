@@ -63,3 +63,53 @@ def check_pasted(text: str) -> str:
             "that looks like the bot-check page rather than the posting — "
             "copy the job description itself")
     return text
+
+
+# Does the posting ask for a cover letter?
+#
+# A regex, not an LLM field: crawled postings never go through the
+# extraction step — only manually added ones do — and crawling is where
+# almost all the volume is. This runs on any description text, costs
+# nothing, and is recomputed on every crawl.
+#
+# Order matters. "a cover letter is not required" contains "cover letter
+# is required", so the negative and optional phrasings are tested first.
+_CL = r"cover\s+letters?"
+
+_CL_NOT_WANTED = re.compile(
+    rf"{_CL}\s+(?:are|is)?\s*(?:not\s+(?:required|needed|necessary)|unnecessary)"
+    rf"|(?:do\s*not|don'?t|please\s+do\s*not)\s+(?:send|submit|include|attach|upload)[^.]{{0,30}}{_CL}"
+    rf"|no\s+{_CL}"
+    rf"|r[eé]sum[eé]s?\s+only", re.I)
+
+_CL_OPTIONAL = re.compile(
+    rf"{_CL}\s+(?:are|is)?\s*optional"
+    rf"|optional(?:ly)?[^.]{{0,20}}{_CL}"
+    rf"|you\s+may\s+(?:also\s+)?(?:include|submit|attach|upload)[^.]{{0,20}}{_CL}"
+    rf"|{_CL}[^.]{{0,30}}(?:encouraged|welcome)", re.I)
+
+_CL_REQUIRED = re.compile(
+    rf"{_CL}\s+(?:are|is)?\s*(?:required|mandatory)"
+    rf"|(?:required|mandatory)[^.]{{0,20}}{_CL}"
+    rf"|(?:must|should|please)\s+(?:also\s+)?(?:include|submit|attach|upload|provide|send)[^.]{{0,30}}{_CL}"
+    rf"|(?:include|submit|attach|upload|provide)\s+(?:a\s+)?(?:r[eé]sum[eé]\s+and\s+(?:a\s+)?)?{_CL}"
+    rf"|{_CL}\s+(?:and|&)\s+r[eé]sum[eé]"
+    rf"|r[eé]sum[eé]\s+(?:and|&)\s+(?:a\s+)?{_CL}", re.I)
+
+
+def cover_letter_signal(text: str) -> str:
+    """'required' | 'optional' | 'not_wanted' | 'unstated'.
+
+    What the posting SAYS, which is not the same as what its form has —
+    plenty of postings say nothing at all, so 'unstated' is the common
+    answer and means exactly that. Advisory only: it tells the person
+    whether a letter is worth writing, it does not decide for them.
+    """
+    t = text or ""
+    if _CL_NOT_WANTED.search(t):
+        return "not_wanted"
+    if _CL_OPTIONAL.search(t):
+        return "optional"
+    if _CL_REQUIRED.search(t):
+        return "required"
+    return "unstated"

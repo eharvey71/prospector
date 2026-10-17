@@ -33,7 +33,17 @@ const normFlag = (f) =>
 // Pieces
 // ---------------------------------------------------------------------------
 
-function MatchInsight({ app, threshold, queue }) {
+// What the POSTING says about a cover letter. Not what its form has —
+// plenty say nothing, and "unstated" means exactly that, so it is left
+// unsaid rather than guessed at.
+const COVER_LETTER_NOTE = {
+  required: { cls: "warn", text: "This posting asks for a cover letter." },
+  optional: { cls: "accent", text: "A cover letter is optional here." },
+  not_wanted: { cls: "ok", text: "This posting doesn't want a cover letter — "
+    + "you can approve it straight away." },
+};
+
+function MatchInsight({ app, threshold, queue, posting }) {
   const m = app.match || {};
   const score = m.score ?? 0;
   const flags = (m.red_flags || []).map(normFlag);
@@ -105,6 +115,12 @@ function MatchInsight({ app, threshold, queue }) {
         </details>
       )}
 
+      {COVER_LETTER_NOTE[posting?.cover_letter] && (
+        <p className={`pill ${COVER_LETTER_NOTE[posting.cover_letter].cls}`}
+           style={{ display: "inline-block", margin: "10px 0 0" }}>
+          {COVER_LETTER_NOTE[posting.cover_letter].text}
+        </p>
+      )}
       <p className="hint" style={{ margin: "10px 0 0" }}>{nextStep}</p>
     </div>
   );
@@ -732,7 +748,8 @@ export default function ReviewQueue() {
           {apps.length === 0 && <p className="empty">Nothing waiting. The engine will add drafts here.</p>}
           {apps.map((a) => (
             <Row key={a.id} a={a}>
-              <MatchInsight app={a} threshold={threshold} queue="review" />
+              <MatchInsight app={a} threshold={threshold} queue="review"
+                            posting={postings[a.posting_id]} />
               <div style={{ marginTop: 6 }}><ResumeLink path={a.resume_path} /></div>
               {!a.letter?.text && (
                 <p className="hint" style={{ marginTop: 8 }}>
@@ -817,7 +834,8 @@ export default function ReviewQueue() {
             </p>}
           {matches.map((a) => (
             <Row key={a.id} a={a}>
-              <MatchInsight app={a} threshold={threshold} queue="matched" />
+              <MatchInsight app={a} threshold={threshold} queue="matched"
+                            posting={postings[a.posting_id]} />
               <div className="actions">
                 <button className="btn-primary" disabled={draftingIds.includes(a.id)}
                         onClick={() => writeLetter(a.id)}>

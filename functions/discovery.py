@@ -30,6 +30,8 @@ from urllib.parse import urldefrag, urljoin
 
 import httpx
 from google.cloud import firestore
+
+from posting_text import cover_letter_signal
 from google.cloud.firestore_v1.base_query import FieldFilter
 from pydantic import BaseModel, Field
 
@@ -499,6 +501,9 @@ def _upsert_all(db: firestore.Client, postings: list[JobPosting]) -> int:
         doc = p.model_dump(mode="json")
         doc["lastSeen"] = now
         doc["active"] = True
+        # Recomputed on every crawl, so existing postings pick it up
+        # within a cycle and a reworded posting stays accurate.
+        doc["cover_letter"] = cover_letter_signal(p.description_text or "")
         # merge=True keeps firstSeen from the original write
         batch.set(ref, doc, merge=True)
         if (i + 1) % 400 == 0:  # Firestore batch limit is 500 ops
